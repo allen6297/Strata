@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "name": "demo.scene",
+  "entities": [
+    {
+      "id": "ent_hero",
+      "name": "Hero",
+      "kind": "sprite",
+      "parentId": null,
+      "scriptId": "file:Hero.rg",
+      "x": 0,
+      "y": 0,
+      "width": 64,
+      "height": 64,
+      "rotation": 0,
+      "color": "#3db8a8",
+      "visible": true,
+      "locked": false
+    }
+  ],
+  "scripts": []
+}

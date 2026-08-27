@@ -5,9 +5,27 @@
   "windows": ["main"],
   "permissions": [
     "core:default",
+    "dialog:default",
+    "fs:default",
     {
       "identifier": "allow-run-rosegold",
       "allow": [{ "name": "run_rosegold" }]
+    },
+    {
+      "identifier": "allow-run-rosegold-hooks",
+      "allow": [{ "name": "run_rosegold_hooks" }]
+    },
+    {
+      "identifier": "allow-list-project-files",
+      "allow": [{ "name": "list_project_files" }]
+    },
+    {
+      "identifier": "allow-write-project-file",
+      "allow": [{ "name": "write_project_file" }]
+    },
+    {
+      "identifier": "allow-read-text-file",
+      "allow": [{ "name": "read_text_file" }]
     }
   ]
 }

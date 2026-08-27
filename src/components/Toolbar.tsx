@@ -6,8 +6,10 @@ import {
   Camera,
   Circle,
   Copy,
+  FolderKanban,
   FolderOpen,
   Hand,
+  Magnet,
   MousePointer2,
   Pause,
   Play,
@@ -22,7 +24,9 @@ import {
 interface ToolbarProps {
   tool: ToolMode
   playing: boolean
+  snap: boolean
   sceneName: string
+  projectLabel: string | null
   dirty: boolean
   status: string | null
   canDelete: boolean
@@ -30,6 +34,7 @@ interface ToolbarProps {
   canUndo: boolean
   canRedo: boolean
   onToolChange: (tool: ToolMode) => void
+  onSnapToggle: () => void
   onPlayToggle: () => void
   onAddSprite: () => void
   onAddEmpty: () => void
@@ -40,12 +45,16 @@ interface ToolbarProps {
   onRedo: () => void
   onSave: () => void
   onLoad: () => void
+  onOpenProject: () => void
+  onSaveProject: () => void
 }
 
 export function Toolbar({
   tool,
   playing,
+  snap,
   sceneName,
+  projectLabel,
   dirty,
   status,
   canDelete,
@@ -53,6 +62,7 @@ export function Toolbar({
   canUndo,
   canRedo,
   onToolChange,
+  onSnapToggle,
   onPlayToggle,
   onAddSprite,
   onAddEmpty,
@@ -63,6 +73,8 @@ export function Toolbar({
   onRedo,
   onSave,
   onLoad,
+  onOpenProject,
+  onSaveProject,
 }: ToolbarProps) {
   return (
     <header className="flex h-11 shrink-0 items-center gap-2 border-b border-[var(--border)] bg-[var(--bg-panel)] px-3 sm:gap-3">
@@ -96,6 +108,16 @@ export function Toolbar({
           onClick={() => onToolChange('move')}
         >
           <Hand className="h-3.5 w-3.5" />
+        </Button>
+        <Button
+          variant="toolbar"
+          size="icon"
+          active={snap}
+          title="Snap to grid (G) — hold Shift to bypass"
+          data-testid="snap-toggle"
+          onClick={onSnapToggle}
+        >
+          <Magnet className="h-3.5 w-3.5" />
         </Button>
       </div>
 
@@ -182,8 +204,9 @@ export function Toolbar({
       </div>
 
       <div className="ml-auto flex min-w-0 items-center gap-2">
-        <div className="hidden min-w-0 flex-col items-end leading-tight md:flex">
-          <span className="max-w-[10rem] truncate font-mono text-[10px] text-[var(--text-muted)]">
+        <div className="hidden min-w-0 flex-col items-end leading-tight lg:flex">
+          <span className="max-w-[12rem] truncate font-mono text-[10px] text-[var(--text-muted)]">
+            {projectLabel ? `${projectLabel}/` : ''}
             {sceneName}
             {dirty ? ' •' : ''}
           </span>
@@ -196,17 +219,36 @@ export function Toolbar({
         <Button
           variant="toolbar"
           size="icon"
+          onClick={onOpenProject}
+          title="Open project folder"
+          data-testid="open-project"
+        >
+          <FolderKanban className="h-3.5 w-3.5" />
+        </Button>
+        <Button
+          variant="toolbar"
+          size="icon"
           onClick={onLoad}
-          title="Open scene"
+          title="Open .scene file"
           data-testid="load-scene"
         >
           <FolderOpen className="h-3.5 w-3.5" />
         </Button>
         <Button
+          variant="ghost"
+          size="sm"
+          onClick={onSaveProject}
+          title="Save into project folder"
+          data-testid="save-project"
+          disabled={!projectLabel}
+        >
+          Save Project
+        </Button>
+        <Button
           variant="default"
           size="sm"
           onClick={onSave}
-          title="Save (Ctrl+S)"
+          title="Save scene download (Ctrl+S)"
           data-testid="save-scene"
         >
           <Save className="h-3.5 w-3.5" />

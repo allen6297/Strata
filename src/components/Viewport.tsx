@@ -7,10 +7,19 @@ interface ViewportProps {
   selectedIds: string[]
   tool: ToolMode
   playing: boolean
+  snap: boolean
+  gridSize?: number
   onSelect: (id: string | null, opts?: { additive?: boolean }) => void
   onMoveEntity: (id: string, worldX: number, worldY: number) => void
   onMoveBegin?: () => void
   onMoveEnd?: () => void
+}
+
+type DragMode = 'pan' | 'entity' | 'gizmo-x' | 'gizmo-y' | null
+
+function snapValue(n: number, grid: number, enabled: boolean) {
+  if (!enabled || grid <= 0) return Math.round(n)
+  return Math.round(n / grid) * grid
 }
 
 export function Viewport({
@@ -18,6 +27,8 @@ export function Viewport({
   selectedIds,
   tool,
   playing,
+  snap,
+  gridSize = 16,
   onSelect,
   onMoveEntity,
   onMoveBegin,
@@ -27,7 +38,7 @@ export function Viewport({
   const wrapRef = useRef<HTMLDivElement>(null)
   const cameraRef = useRef({ x: 0, y: 0, zoom: 1 })
   const dragRef = useRef<{
-    mode: 'pan' | 'entity' | null
+    mode: DragMode
     startX: number
     startY: number
     originCamX: number
@@ -49,10 +60,14 @@ export function Viewport({
   const entitiesRef = useRef(entities)
   const selectedRef = useRef(selectedIds)
   const playingRef = useRef(playing)
+  const snapRef = useRef(snap)
+  const gridRef = useRef(gridSize)
 
   entitiesRef.current = entities
   selectedRef.current = selectedIds
   playingRef.current = playing
+  snapRef.current = snap
+  gridRef.current = gridSize
 
   useEffect(() => {
     const canvas = canvasRef.current
@@ -81,6 +96,26 @@ export function Viewport({
       const x = (sx - rect.left - rect.width / 2) / cam.zoom + cam.x
       const y = (sy - rect.top - rect.height / 2) / cam.zoom + cam.y
       return { x, y }
+    }
+
+    const primarySelected = () => {
+      const ids = selectedRef.current
+      if (!ids.length) return null
+      return entitiesRef.current.find((e) => e.id === ids[ids.length - 1]) ?? null
+    }
+
+    const gizmoHit = (wx: number, wy: number) => {
+      const e = primarySelected()
+      if (!e || !e.visible) return null
+      const byId = entityMap(entitiesRef.current)
+      const world = getWorldPosition(e, byId)
+      const handle = 10 / cameraRef.current.zoom
+      const arm = Math.max(28, Math.min(e.width, e.height) * 0.75)
+      // X handle at +arm
+      if (Math.hypot(wx - (world.x + arm), wy - world.y) <= handle) return 'x'
+      // Y handle at -arm (up in screen space is -y in our world if y increases down... our y increases down like canvas)
+      if (Math.hypot(wx - world.x, wy - (world.y - arm)) <= handle) return 'y'
+      return null
     }
 
     const hitTest = (wx: number, wy: number) => {
@@ -113,6 +148,7 @@ export function Viewport({
       const cam = cameraRef.current
       const t = playTimeRef.current
       const byId = entityMap(entitiesRef.current)
+      const grid = gridRef.current
 
       ctx.clearRect(0, 0, w, h)
       ctx.fillStyle = '#0e1014'
@@ -123,7 +159,6 @@ export function Viewport({
       ctx.scale(cam.zoom, cam.zoom)
       ctx.translate(-cam.x, -cam.y)
 
-      const grid = 32
       const left = cam.x - w / 2 / cam.zoom
       const right = cam.x + w / 2 / cam.zoom
       const top = cam.y - h / 2 / cam.zoom
@@ -131,7 +166,7 @@ export function Viewport({
       const startX = Math.floor(left / grid) * grid
       const startY = Math.floor(top / grid) * grid
 
-      ctx.strokeStyle = '#1f2430'
+      ctx.strokeStyle = snapRef.current ? '#2a3344' : '#1f2430'
       ctx.lineWidth = 1 / cam.zoom
       ctx.beginPath()
       for (let x = startX; x <= right; x += grid) {
@@ -184,12 +219,6 @@ export function Viewport({
           ctx.beginPath()
           ctx.arc(0, 0, Math.min(e.width, e.height) / 2, 0, Math.PI * 2)
           ctx.stroke()
-          ctx.beginPath()
-          ctx.moveTo(-6, 0)
-          ctx.lineTo(6, 0)
-          ctx.moveTo(0, -6)
-          ctx.lineTo(0, 6)
-          ctx.stroke()
         }
 
         if (selectedRef.current.includes(e.id)) {
@@ -203,8 +232,6 @@ export function Viewport({
             e.height + 8,
           )
           ctx.setLineDash([])
-          ctx.fillStyle = '#3db8a8'
-          ctx.fillRect(-4 / cam.zoom, -4 / cam.zoom, 8 / cam.zoom, 8 / cam.zoom)
         }
 
         ctx.restore()
@@ -221,20 +248,71 @@ export function Viewport({
         ctx.restore()
       }
 
+      // Transform gizmo on primary selection
+      const primary = primarySelected()
+      if (primary && primary.visible && tool === 'select') {
+        const world = getWorldPosition(primary, byId)
+        const arm = Math.max(28, Math.min(primary.width, primary.height) * 0.75)
+        const handle = 5 / cam.zoom
+
+        ctx.save()
+        ctx.translate(world.x, world.y)
+        // X axis
+        ctx.strokeStyle = '#e06c75'
+        ctx.fillStyle = '#e06c75'
+        ctx.lineWidth = 2 / cam.zoom
+        ctx.beginPath()
+        ctx.moveTo(0, 0)
+        ctx.lineTo(arm, 0)
+        ctx.stroke()
+        ctx.beginPath()
+        ctx.moveTo(arm, 0)
+        ctx.lineTo(arm - 8 / cam.zoom, -4 / cam.zoom)
+        ctx.lineTo(arm - 8 / cam.zoom, 4 / cam.zoom)
+        ctx.closePath()
+        ctx.fill()
+        ctx.beginPath()
+        ctx.arc(arm, 0, handle, 0, Math.PI * 2)
+        ctx.fill()
+
+        // Y axis (up = negative y)
+        ctx.strokeStyle = '#98c379'
+        ctx.fillStyle = '#98c379'
+        ctx.beginPath()
+        ctx.moveTo(0, 0)
+        ctx.lineTo(0, -arm)
+        ctx.stroke()
+        ctx.beginPath()
+        ctx.moveTo(0, -arm)
+        ctx.lineTo(-4 / cam.zoom, -arm + 8 / cam.zoom)
+        ctx.lineTo(4 / cam.zoom, -arm + 8 / cam.zoom)
+        ctx.closePath()
+        ctx.fill()
+        ctx.beginPath()
+        ctx.arc(0, -arm, handle, 0, Math.PI * 2)
+        ctx.fill()
+
+        ctx.fillStyle = '#e8eaef'
+        ctx.beginPath()
+        ctx.arc(0, 0, 3.5 / cam.zoom, 0, Math.PI * 2)
+        ctx.fill()
+        ctx.restore()
+      }
+
       ctx.restore()
 
       ctx.fillStyle = 'rgba(20,22,26,0.72)'
-      ctx.fillRect(10, 10, 190, 44)
+      ctx.fillRect(10, 10, 210, 44)
       ctx.strokeStyle = '#2c313c'
-      ctx.strokeRect(10, 10, 190, 44)
+      ctx.strokeRect(10, 10, 210, 44)
       ctx.fillStyle = '#8b93a7'
       ctx.font = '500 11px "IBM Plex Mono", monospace'
       ctx.fillText(
-        `zoom ${(cam.zoom * 100).toFixed(0)}%  ·  ${playingRef.current ? 'PLAY' : 'EDIT'}`,
+        `zoom ${(cam.zoom * 100).toFixed(0)}% · ${playingRef.current ? 'PLAY' : 'EDIT'}${snapRef.current ? ' · SNAP' : ''}`,
         18,
         28,
       )
-      ctx.fillText(`cam ${cam.x.toFixed(0)}, ${cam.y.toFixed(0)}`, 18, 44)
+      ctx.fillText(`cam ${cam.x.toFixed(0)}, ${cam.y.toFixed(0)} · grid ${grid}`, 18, 44)
 
       raf = requestAnimationFrame(draw)
     }
@@ -248,9 +326,31 @@ export function Viewport({
 
     const onPointerDown = (e: PointerEvent) => {
       const world = worldFromScreen(e.clientX, e.clientY)
-      const hit = hitTest(world.x, world.y)
       const wantsPan = tool === 'move' || e.button === 1 || e.altKey
       const byId = entityMap(entitiesRef.current)
+
+      if (e.button === 0 && tool === 'select') {
+        const axis = gizmoHit(world.x, world.y)
+        const primary = primarySelected()
+        if (axis && primary && !primary.locked) {
+          const wpos = getWorldPosition(primary, byId)
+          dragRef.current = {
+            mode: axis === 'x' ? 'gizmo-x' : 'gizmo-y',
+            startX: e.clientX,
+            startY: e.clientY,
+            originCamX: cameraRef.current.x,
+            originCamY: cameraRef.current.y,
+            entityId: primary.id,
+            entityOriginWorldX: wpos.x,
+            entityOriginWorldY: wpos.y,
+          }
+          onMoveBegin?.()
+          canvas.setPointerCapture(e.pointerId)
+          return
+        }
+      }
+
+      const hit = hitTest(world.x, world.y)
 
       if (e.button === 0 && hit && tool === 'select') {
         onSelect(hit.id, { additive: e.metaKey || e.ctrlKey })
@@ -298,6 +398,8 @@ export function Viewport({
       const cam = cameraRef.current
       const dx = (e.clientX - drag.startX) / cam.zoom
       const dy = (e.clientY - drag.startY) / cam.zoom
+      const grid = gridRef.current
+      const doSnap = snapRef.current && !e.shiftKey
 
       if (drag.mode === 'pan') {
         cam.x = drag.originCamX - dx
@@ -305,14 +407,30 @@ export function Viewport({
       } else if (drag.mode === 'entity' && drag.entityId) {
         onMoveEntity(
           drag.entityId,
-          Math.round(drag.entityOriginWorldX + dx),
-          Math.round(drag.entityOriginWorldY + dy),
+          snapValue(drag.entityOriginWorldX + dx, grid, doSnap),
+          snapValue(drag.entityOriginWorldY + dy, grid, doSnap),
+        )
+      } else if (drag.mode === 'gizmo-x' && drag.entityId) {
+        onMoveEntity(
+          drag.entityId,
+          snapValue(drag.entityOriginWorldX + dx, grid, doSnap),
+          drag.entityOriginWorldY,
+        )
+      } else if (drag.mode === 'gizmo-y' && drag.entityId) {
+        onMoveEntity(
+          drag.entityId,
+          drag.entityOriginWorldX,
+          snapValue(drag.entityOriginWorldY + dy, grid, doSnap),
         )
       }
     }
 
     const onPointerUp = () => {
-      if (dragRef.current.mode === 'entity') {
+      if (
+        dragRef.current.mode === 'entity' ||
+        dragRef.current.mode === 'gizmo-x' ||
+        dragRef.current.mode === 'gizmo-y'
+      ) {
         onMoveEnd?.()
       }
       dragRef.current.mode = null

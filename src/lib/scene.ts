@@ -1,4 +1,7 @@
-import { DEFAULT_PLAYER_SCRIPT } from '@/lib/rosegold'
+import {
+  DEFAULT_COIN_SCRIPT,
+  DEFAULT_PLAYER_SCRIPT,
+} from '@/lib/rosegold'
 import { uid } from '@/lib/utils'
 import type { AssetItem, Entity, EntityKind, SceneDocument } from '@/types/scene'
 import { SCRIPTS_STORAGE_KEY } from '@/types/scene'
@@ -30,12 +33,8 @@ export function createDefaultScripts(): AssetItem[] {
       name: 'CoinSpin.rg',
       type: 'script',
       language: 'rosegold',
-      size: '120 B',
-      content: `fn main(): Int {
-    print("[Strata] CoinSpin");
-    return 0;
-}
-`,
+      size: `${DEFAULT_COIN_SCRIPT.length} B`,
+      content: DEFAULT_COIN_SCRIPT,
     },
   ]
 }

@@ -6,7 +6,17 @@ import { ScriptPanel } from '@/components/ScriptPanel'
 import { Toolbar } from '@/components/Toolbar'
 import { Viewport } from '@/components/Viewport'
 import { useEntityHistory } from '@/hooks/useEntityHistory'
-import { buildPlayDriver, runRoseGoldSource } from '@/lib/rosegold'
+import {
+  collectHookJobs,
+  runRoseGoldHooks,
+} from '@/lib/rosegold'
+import {
+  joinProjectPath,
+  listProjectFiles,
+  pickProjectDirectory,
+  projectFilesToAssets,
+  writeProjectFile,
+} from '@/lib/project'
 import {
   createDefaultEntities,
   createDefaultScripts,
@@ -67,6 +77,9 @@ export default function App() {
   })
   const [tool, setTool] = useState<ToolMode>('select')
   const [playing, setPlaying] = useState(false)
+  const [snap, setSnap] = useState(true)
+  const [projectPath, setProjectPath] = useState<string | null>(null)
+  const [diskAssets, setDiskAssets] = useState<AssetItem[]>([])
   const [scripts, setScripts] = useState<AssetItem[]>(bootScripts)
   const [selectedAssetId, setSelectedAssetId] = useState<string | null>(
     'scr_player',
@@ -80,9 +93,16 @@ export default function App() {
   const statusTimer = useRef<number | null>(null)
 
   const assets = useMemo(
-    () => [...scripts, ...STATIC_ASSETS],
-    [scripts],
+    () => [...scripts, ...(diskAssets.length ? diskAssets : STATIC_ASSETS)],
+    [scripts, diskAssets],
   )
+
+  const projectLabel = useMemo(() => {
+    if (!projectPath) return null
+    if (projectPath.startsWith('browser:')) return projectPath.slice(8)
+    const parts = projectPath.split(/[\\/]/)
+    return parts[parts.length - 1] || projectPath
+  }, [projectPath])
 
   const primaryId = selectedIds[selectedIds.length - 1] ?? null
   const selected = useMemo(
@@ -299,8 +319,8 @@ export default function App() {
     }
     setPlaying(true)
     flashStatus('Playing…')
-    const driver = buildPlayDriver(entities, scripts)
-    const result = await runRoseGoldSource(driver)
+    const jobs = collectHookJobs(entities, scripts)
+    const result = await runRoseGoldHooks(jobs)
     const chunks = [
       result.message,
       result.stdout && `stdout:\n${result.stdout}`,
@@ -309,8 +329,71 @@ export default function App() {
     ].filter(Boolean)
     setPlayLog(chunks.join('\n\n'))
     if (!result.ok) flashStatus(result.message.slice(0, 80))
-    else flashStatus('RoseGold ok')
+    else flashStatus('Hooks ok')
   }, [entities, flashStatus, playing, scripts])
+
+  const openProject = useCallback(async () => {
+    try {
+      const path = await pickProjectDirectory()
+      if (!path) return
+      const files = await listProjectFiles(path)
+      const mapped = projectFilesToAssets(files)
+      setProjectPath(path)
+      if (mapped.scripts.length) persistScripts(mapped.scripts)
+      setDiskAssets(mapped.assets)
+      if (mapped.sceneText) {
+        try {
+          const doc = parseSceneDocument(JSON.parse(mapped.sceneText))
+          const byName = new Map(mapped.scripts.map((s) => [s.name, s.id]))
+          const entities = doc.entities.map((e) => {
+            if (!e.scriptId) return e
+            // Remap file:Name.rg or bare names onto loaded script ids
+            const bare = e.scriptId.replace(/^file:(?:.*[\\/])?/, '')
+            const matched = byName.get(bare) ?? byName.get(e.scriptId)
+            return matched ? { ...e, scriptId: matched } : e
+          })
+          replace(entities)
+          setSceneName(doc.name)
+          setSelectedIds(entities[0]?.id ? [entities[0].id] : [])
+        } catch {
+          // keep current scene if parse fails
+        }
+      }
+      flashStatus(`Opened ${files.length} project file(s)`)
+      setDirty(false)
+    } catch (err) {
+      flashStatus(err instanceof Error ? err.message : 'Open project failed')
+    }
+  }, [flashStatus, persistScripts, replace])
+
+  const saveProject = useCallback(async () => {
+    if (!projectPath) {
+      flashStatus('Open a project folder first')
+      return
+    }
+    try {
+      const doc = toSceneDocument(sceneName, entities, scripts)
+      const sceneFile = sceneName.endsWith('.scene')
+        ? sceneName
+        : `${sceneName}.scene`
+      await writeProjectFile(
+        joinProjectPath(projectPath, sceneFile),
+        JSON.stringify(doc, null, 2),
+      )
+      for (const script of scripts) {
+        await writeProjectFile(
+          joinProjectPath(projectPath, script.name),
+          script.content ?? '',
+        )
+      }
+      saveSceneToStorage(doc)
+      saveScriptsToStorage(scripts)
+      setDirty(false)
+      flashStatus('Project saved')
+    } catch (err) {
+      flashStatus(err instanceof Error ? err.message : 'Save project failed')
+    }
+  }, [entities, flashStatus, projectPath, sceneName, scripts])
 
   const createScript = useCallback(() => {
     const id = uid('scr')
@@ -376,6 +459,7 @@ export default function App() {
 
       if (e.key === 'v' || e.key === 'V') setTool('select')
       if (e.key === 'h' || e.key === 'H') setTool('move')
+      if (e.key === 'g' || e.key === 'G') setSnap((s) => !s)
       if (e.key === 'Delete' || e.key === 'Backspace') {
         e.preventDefault()
         deleteSelected()
@@ -401,7 +485,9 @@ export default function App() {
       <Toolbar
         tool={tool}
         playing={playing}
+        snap={snap}
         sceneName={sceneName}
+        projectLabel={projectLabel}
         dirty={dirty}
         status={status}
         canDelete={selectedIds.length > 0}
@@ -409,6 +495,7 @@ export default function App() {
         canUndo={canUndo}
         canRedo={canRedo}
         onToolChange={setTool}
+        onSnapToggle={() => setSnap((s) => !s)}
         onPlayToggle={() => void togglePlay()}
         onAddSprite={() => addEntity('sprite')}
         onAddEmpty={() => addEntity('empty')}
@@ -419,6 +506,8 @@ export default function App() {
         onRedo={handleRedo}
         onSave={saveScene}
         onLoad={openScenePicker}
+        onOpenProject={() => void openProject()}
+        onSaveProject={() => void saveProject()}
       />
 
       <input
@@ -455,6 +544,7 @@ export default function App() {
             selectedIds={selectedIds}
             tool={tool}
             playing={playing}
+            snap={snap}
             onSelect={selectEntity}
             onMoveEntity={onMoveEntity}
             onMoveBegin={beginTransient}

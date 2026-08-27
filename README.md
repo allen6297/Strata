@@ -1,10 +1,10 @@
 # Strata — Scene Editor
 
-A lightweight **2D game engine editor**: hierarchy, canvas viewport, inspector, RoseGold scripts, and asset browser.
+A lightweight **2D game engine editor** with hierarchy, viewport gizmos, RoseGold scripts, project folders, and a Tauri desktop shell.
 
-Local path: `/Users/kalob/Code/strata`. UI is Vite + React + TypeScript + Tailwind, wrapped with **Tauri** for desktop.
+Local path: `/Users/kalob/Code/strata`.
 
-## Browser (quick)
+## Browser
 
 ```bash
 npm install
@@ -15,57 +15,52 @@ Open [http://127.0.0.1:4521](http://127.0.0.1:4521).
 
 ## Desktop (Tauri)
 
-Requires [Rust](https://rustup.rs/) (Xcode CLT on macOS).
+Requires [Rust](https://rustup.rs/) + Xcode CLT on macOS.
 
 ```bash
 npm install
 npm run tauri:dev
 ```
 
-Ship a release build:
-
 ```bash
 npm run tauri:build
 ```
 
-## RoseGold scripts
+## RoseGold hooks
 
-Strata treats `.rg` as the gameplay scripting language ([RoseGold-PY](https://github.com/allen6297/RoseGold-PY)).
+Scripts use entity lifecycle hooks:
 
-1. Edit scripts in the **RoseGold** panel (or select a `.rg` asset).
-2. Attach a script on an entity in the **Inspector**.
-3. Press **Play** — viewport animates; on desktop, Strata also runs `rosegold` and shows stdout in the play log.
-
-```bash
-# once, for desktop Play bridge
-cd /path/to/RoseGold-PY
-python -m venv .venv && source .venv/bin/activate
-pip install -e .
-# ensure `rosegold` is on PATH
+```rg
+fn on_ready(name: Str, x: Float, y: Float): Int { ... }
+fn on_update(name: Str, x: Float, y: Float, dt: Float): Int { ... }
 ```
+
+On **Play**, Strata runs `on_ready` once and a few `on_update` ticks per attached script (desktop requires `rosegold` on PATH). Install from [RoseGold-PY](https://github.com/allen6297/RoseGold-PY).
+
+## Project folders
+
+- **Open Project** — pick a directory; loads `.rg`, `.scene`, textures, audio
+- **Save Project** — writes `*.scene` + scripts back into that folder
+- Sample: `examples/demo-project/`
+
+## Editing
+
+- **Snap (G)** — magnet toggle; hold Shift while dragging to bypass
+- **Gizmo** — red X / green Y handles on the primary selection
+- **Parenting** — drag in Hierarchy or Inspector parent field
+- **Multi-select** — ⌘/Ctrl click, Shift range
 
 ## Shortcuts
 
 | Key | Action |
 |-----|--------|
-| `V` | Select tool |
-| `H` | Pan tool |
-| `Delete` / `Backspace` | Delete selection (incl. subtree) |
-| `Ctrl/Cmd+D` | Duplicate selection |
-| `Ctrl/Cmd+Z` | Undo |
-| `Ctrl/Cmd+Shift+Z` / `Ctrl+Y` | Redo |
-| `Ctrl/Cmd+S` | Save scene |
+| `V` / `H` | Select / Pan |
+| `G` | Toggle snap |
 | `Space` | Play / Stop |
-| `Ctrl/Cmd+click` | Multi-select |
-| `Shift+click` | Range-select in hierarchy |
-
-## Features
-
-- **Hierarchy** — tree parenting (drag-and-drop), visibility/lock, multi-select
-- **Viewport** — pan/zoom, world transforms for children, drag-to-move
-- **Inspector** — transform, parent, RoseGold script attach
-- **RoseGold panel** — edit `.rg`, Play log
-- **Scenes** — JSON `.scene` save/load + localStorage
+| `Ctrl/Cmd+S` | Download `.scene` |
+| `Ctrl/Cmd+Z` / `Shift+Z` | Undo / Redo |
+| `Ctrl/Cmd+D` | Duplicate |
+| `Del` | Delete selection |
 
 ## Scripts
 
