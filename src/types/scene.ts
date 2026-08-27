@@ -6,6 +6,7 @@ export interface Entity {
   kind: EntityKind
   parentId: string | null
   scriptId: string | null
+  textureId: string | null
   x: number
   y: number
   width: number
@@ -24,6 +25,10 @@ export interface AssetItem {
   /** Present for RoseGold / text scripts */
   content?: string
   language?: 'rosegold' | 'text'
+  /** Object URL / Tauri convertFileSrc / public path for textures */
+  url?: string
+  /** Absolute filesystem path when loaded from a project folder */
+  path?: string
 }
 
 export type ToolMode = 'select' | 'move' | 'create'

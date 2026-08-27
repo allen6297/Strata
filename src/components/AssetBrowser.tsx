@@ -6,6 +6,7 @@ interface AssetBrowserProps {
   assets: AssetItem[]
   selectedId: string | null
   onSelect: (id: string) => void
+  onActivate?: (asset: AssetItem) => void
 }
 
 const icons = {
@@ -19,6 +20,7 @@ export function AssetBrowser({
   assets,
   selectedId,
   onSelect,
+  onActivate,
 }: AssetBrowserProps) {
   return (
     <section className="panel-animate flex h-28 shrink-0 flex-col border-t border-[var(--border)] bg-[var(--bg-panel)]">
@@ -27,7 +29,7 @@ export function AssetBrowser({
           Assets
         </h2>
         <span className="ml-auto font-mono text-[10px] text-[var(--text-muted)]">
-          /project/assets
+          dbl-click texture → assign
         </span>
       </div>
       <div className="flex min-h-0 flex-1 gap-2 overflow-x-auto p-2">
@@ -40,6 +42,12 @@ export function AssetBrowser({
               type="button"
               data-testid={`asset-${asset.id}`}
               onClick={() => onSelect(asset.id)}
+              onDoubleClick={() => onActivate?.(asset)}
+              title={
+                asset.type === 'texture'
+                  ? 'Double-click to assign to selection'
+                  : asset.name
+              }
               className={cn(
                 'flex w-28 shrink-0 flex-col rounded-md border px-2 py-2 text-left transition-colors',
                 selected
@@ -47,10 +55,20 @@ export function AssetBrowser({
                   : 'border-[var(--border)] bg-[var(--bg-panel-raised)] hover:border-[var(--border-strong)]',
               )}
             >
-              <div className="mb-2 flex h-12 items-center justify-center rounded bg-[var(--bg-input)]">
-                <Icon className="h-5 w-5 text-[var(--accent)]" />
+              <div className="mb-2 flex h-12 items-center justify-center overflow-hidden rounded bg-[var(--bg-input)]">
+                {asset.type === 'texture' && asset.url ? (
+                  <img
+                    src={asset.url}
+                    alt=""
+                    className="max-h-full max-w-full object-contain"
+                  />
+                ) : (
+                  <Icon className="h-5 w-5 text-[var(--accent)]" />
+                )}
               </div>
-              <div className="truncate text-xs text-[var(--text)]">{asset.name}</div>
+              <div className="truncate text-xs text-[var(--text)]">
+                {asset.name}
+              </div>
               <div className="mt-0.5 font-mono text-[10px] uppercase text-[var(--text-muted)]">
                 {asset.type} · {asset.size}
               </div>

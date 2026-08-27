@@ -5,7 +5,7 @@ fn on_ready(name: Str, x: Float, y: Float): Int {
 }
 
 fn on_update(name: Str, x: Float, y: Float, dt: Float): Int {
-    print("[update] from project");
+    print("strata:move dx=1 dy=0");
     return 0;
 }
 

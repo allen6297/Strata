@@ -26,16 +26,23 @@ npm run tauri:dev
 npm run tauri:build
 ```
 
-## RoseGold hooks
+## Live Play
 
-Scripts use entity lifecycle hooks:
+On **Play**, Strata runs `on_ready` once, then ticks `on_update` while playing.
+
+Scripts can move entities by printing directives:
 
 ```rg
-fn on_ready(name: Str, x: Float, y: Float): Int { ... }
-fn on_update(name: Str, x: Float, y: Float, dt: Float): Int { ... }
+print("strata:move dx=1.5 dy=0");
+print("strata:rot 8");
+print("strata:set x=0 y=10 rot=0");
 ```
 
-On **Play**, Strata runs `on_ready` once and a few `on_update` ticks per attached script (desktop requires `rosegold` on PATH). Install from [RoseGold-PY](https://github.com/allen6297/RoseGold-PY).
+Desktop uses real `rosegold`; the browser applies the same directives from script source as a preview.
+
+## Textures
+
+Assign a texture in the Inspector, or **double-click** a texture asset. Sample images live in `public/textures/` and `examples/demo-project/`.
 
 ## Project folders
 

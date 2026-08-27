@@ -186,6 +186,44 @@ fn read_text_file(path: String) -> Result<String, String> {
   fs::read_to_string(&path).map_err(|e| e.to_string())
 }
 
+#[tauri::command]
+fn read_file_base64(path: String) -> Result<String, String> {
+  use std::io::Read;
+  let mut file = fs::File::open(&path).map_err(|e| e.to_string())?;
+  let mut buf = Vec::new();
+  file.read_to_end(&mut buf).map_err(|e| e.to_string())?;
+  Ok(data_encoding_base64(&buf))
+}
+
+fn data_encoding_base64(bytes: &[u8]) -> String {
+  const TABLE: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+  let mut out = String::new();
+  let mut i = 0;
+  while i + 3 <= bytes.len() {
+    let n = ((bytes[i] as u32) << 16) | ((bytes[i + 1] as u32) << 8) | (bytes[i + 2] as u32);
+    out.push(TABLE[((n >> 18) & 63) as usize] as char);
+    out.push(TABLE[((n >> 12) & 63) as usize] as char);
+    out.push(TABLE[((n >> 6) & 63) as usize] as char);
+    out.push(TABLE[(n & 63) as usize] as char);
+    i += 3;
+  }
+  let rem = bytes.len() - i;
+  if rem == 1 {
+    let n = (bytes[i] as u32) << 16;
+    out.push(TABLE[((n >> 18) & 63) as usize] as char);
+    out.push(TABLE[((n >> 12) & 63) as usize] as char);
+    out.push('=');
+    out.push('=');
+  } else if rem == 2 {
+    let n = ((bytes[i] as u32) << 16) | ((bytes[i + 1] as u32) << 8);
+    out.push(TABLE[((n >> 18) & 63) as usize] as char);
+    out.push(TABLE[((n >> 12) & 63) as usize] as char);
+    out.push(TABLE[((n >> 6) & 63) as usize] as char);
+    out.push('=');
+  }
+  out
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
   tauri::Builder::default()
@@ -196,7 +234,8 @@ pub fn run() {
       run_rosegold_hooks,
       list_project_files,
       write_project_file,
-      read_text_file
+      read_text_file,
+      read_file_base64
     ])
     .setup(|app| {
       if cfg!(debug_assertions) {

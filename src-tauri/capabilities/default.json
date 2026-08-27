@@ -26,6 +26,10 @@
     {
       "identifier": "allow-read-text-file",
       "allow": [{ "name": "read_text_file" }]
+    },
+    {
+      "identifier": "allow-read-file-base64",
+      "allow": [{ "name": "read_file_base64" }]
     }
   ]
 }

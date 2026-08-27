@@ -11,11 +11,28 @@ const COLORS = ['#3db8a8', '#e06c75', '#61afef', '#c678dd', '#e5c07b', '#98c379'
 export const DEFAULT_SCENE_NAME = 'main.scene'
 
 export const STATIC_ASSETS: AssetItem[] = [
-  { id: 'a1', name: 'player.png', type: 'texture', size: '64×64' },
-  { id: 'a2', name: 'tileset.png', type: 'texture', size: '256×256' },
+  {
+    id: 'a1',
+    name: 'player.png',
+    type: 'texture',
+    size: '64×64',
+    url: '/textures/player.png',
+  },
+  {
+    id: 'a2',
+    name: 'tileset.png',
+    type: 'texture',
+    size: '256×256',
+  },
   { id: 'a4', name: 'jump.wav', type: 'audio', size: '48 KB' },
   { id: 'a5', name: 'main.scene', type: 'scene', size: '1.4 KB' },
-  { id: 'a6', name: 'coin.png', type: 'texture', size: '32×32' },
+  {
+    id: 'a6',
+    name: 'coin.png',
+    type: 'texture',
+    size: '32×32',
+    url: '/textures/coin.png',
+  },
 ]
 
 export function createDefaultScripts(): AssetItem[] {
@@ -50,6 +67,7 @@ export function createDefaultEntities(): Entity[] {
       kind: 'sprite',
       parentId: null,
       scriptId: 'scr_player',
+      textureId: 'a1',
       x: 0,
       y: 0,
       width: 64,
@@ -65,6 +83,7 @@ export function createDefaultEntities(): Entity[] {
       kind: 'sprite',
       parentId: null,
       scriptId: null,
+      textureId: null,
       x: 40,
       y: 120,
       width: 220,
@@ -80,6 +99,7 @@ export function createDefaultEntities(): Entity[] {
       kind: 'sprite',
       parentId: 'ent_player',
       scriptId: 'scr_coin',
+      textureId: 'a6',
       x: -90,
       y: -40,
       width: 28,
@@ -95,6 +115,7 @@ export function createDefaultEntities(): Entity[] {
       kind: 'camera',
       parentId: null,
       scriptId: null,
+      textureId: null,
       x: 0,
       y: -20,
       width: 160,
@@ -125,6 +146,7 @@ export function createEntity(kind: EntityKind, index: number): Entity {
     kind,
     parentId: null,
     scriptId: null,
+    textureId: null,
     x: Math.round((Math.random() - 0.5) * 200),
     y: Math.round((Math.random() - 0.5) * 140),
     rotation: 0,
@@ -168,6 +190,7 @@ function normalizeEntity(raw: Partial<Entity>, i: number): Entity {
     kind: (raw.kind as Entity['kind']) || 'empty',
     parentId: raw.parentId ?? null,
     scriptId: raw.scriptId ?? null,
+    textureId: raw.textureId ?? null,
     x: Number(raw.x) || 0,
     y: Number(raw.y) || 0,
     width: Math.max(8, Number(raw.width) || 32),

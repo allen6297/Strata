@@ -8,8 +8,7 @@ export const DEFAULT_PLAYER_SCRIPT = `fn on_ready(name: Str, x: Float, y: Float)
 }
 
 fn on_update(name: Str, x: Float, y: Float, dt: Float): Int {
-    print("[update]");
-    print(name);
+    print("strata:move dx=1.5 dy=0");
     return 0;
 }
 
@@ -25,7 +24,7 @@ export const DEFAULT_COIN_SCRIPT = `fn on_ready(name: Str, x: Float, y: Float): 
 }
 
 fn on_update(name: Str, x: Float, y: Float, dt: Float): Int {
-    print("[update] coin");
+    print("strata:rot 8");
     return 0;
 }
 
@@ -40,6 +39,11 @@ export function scriptHasHook(
 ): boolean {
   const re = new RegExp(`fn\\s+${hook}\\s*\\(`)
   return re.test(content)
+}
+
+function rgFloat(n: number): string {
+  if (!Number.isFinite(n)) return '0.0'
+  return Number.isInteger(n) ? `${n}.0` : String(n)
 }
 
 /** Strip an existing main and append a hook-driving main. */
@@ -65,11 +69,6 @@ export function buildHookProgram(
   return `${withoutMain.trim()}\n\nfn main(): Int {\n${body}\n}\n`
 }
 
-function rgFloat(n: number): string {
-  if (!Number.isFinite(n)) return '0.0'
-  return Number.isInteger(n) ? `${n}.0` : String(n)
-}
-
 export function buildPlayDriver(
   entities: Entity[],
   scripts: AssetItem[],
@@ -92,41 +91,25 @@ export type RoseGoldRunResult = {
   message: string
 }
 
-export type HookJob = { label: string; source: string }
+export type HookJob = { label: string; source: string; entityId?: string }
 
-export function collectHookJobs(
+export function collectReadyJobs(
   entities: Entity[],
   scripts: AssetItem[],
 ): HookJob[] {
   const scriptById = new Map(scripts.map((s) => [s.id, s]))
   const jobs: HookJob[] = []
-
   for (const e of entities) {
     if (!e.scriptId) continue
     const script = scriptById.get(e.scriptId)
     if (!script?.content?.trim()) continue
-    if (scriptHasHook(script.content, 'on_ready')) {
-      jobs.push({
-        label: `${e.name} on_ready`,
-        source: buildHookProgram(script.content, 'on_ready', e),
-      })
-    }
-    if (scriptHasHook(script.content, 'on_update')) {
-      // Smoke a few update ticks at play start
-      for (const tick of [0, 1, 2]) {
-        jobs.push({
-          label: `${e.name} on_update#${tick}`,
-          source: buildHookProgram(
-            script.content,
-            'on_update',
-            e,
-            0.016 * (tick + 1),
-          ),
-        })
-      }
-    }
+    if (!scriptHasHook(script.content, 'on_ready')) continue
+    jobs.push({
+      label: `${e.name} on_ready`,
+      entityId: e.id,
+      source: buildHookProgram(script.content, 'on_ready', e),
+    })
   }
-
   if (!jobs.length) {
     jobs.push({
       label: 'scene driver',
@@ -134,6 +117,144 @@ export function collectHookJobs(
     })
   }
   return jobs
+}
+
+export function collectUpdateJobs(
+  entities: Entity[],
+  scripts: AssetItem[],
+  dt: number,
+): HookJob[] {
+  const scriptById = new Map(scripts.map((s) => [s.id, s]))
+  const jobs: HookJob[] = []
+  for (const e of entities) {
+    if (!e.scriptId || e.locked) continue
+    const script = scriptById.get(e.scriptId)
+    if (!script?.content?.trim()) continue
+    if (!scriptHasHook(script.content, 'on_update')) continue
+    jobs.push({
+      label: `${e.name} on_update`,
+      entityId: e.id,
+      source: buildHookProgram(script.content, 'on_update', e, dt),
+    })
+  }
+  return jobs
+}
+
+/** @deprecated use collectReadyJobs / collectUpdateJobs */
+export function collectHookJobs(
+  entities: Entity[],
+  scripts: AssetItem[],
+): HookJob[] {
+  return [
+    ...collectReadyJobs(entities, scripts),
+    ...collectUpdateJobs(entities, scripts, 0.016),
+  ]
+}
+
+export type StrataDirective =
+  | { type: 'move'; entityId: string; dx: number; dy: number }
+  | { type: 'rot'; entityId: string; degrees: number }
+  | { type: 'set'; entityId: string; x?: number; y?: number; rot?: number }
+
+/** Parse `strata:...` lines from RoseGold stdout, scoped to a job's entity. */
+export function parseStrataDirectives(
+  stdout: string,
+  jobs: HookJob[],
+): StrataDirective[] {
+  const out: StrataDirective[] = []
+  const sections = stdout.split(/^---\s+(.+?)\s+---\s*$/m)
+  // If no section headers, apply to all jobs with entityId from whole stdout
+  if (sections.length === 1) {
+    for (const job of jobs) {
+      if (!job.entityId) continue
+      out.push(...parseDirectiveBlock(stdout, job.entityId))
+    }
+    return out
+  }
+
+  for (let i = 1; i < sections.length; i += 2) {
+    const label = sections[i]
+    const body = sections[i + 1] ?? ''
+    const job = jobs.find((j) => j.label === label)
+    if (!job?.entityId) continue
+    out.push(...parseDirectiveBlock(body, job.entityId))
+  }
+  return out
+}
+
+function parseDirectiveBlock(text: string, entityId: string): StrataDirective[] {
+  const out: StrataDirective[] = []
+  for (const line of text.split(/\r?\n/)) {
+    const trimmed = line.trim()
+    if (!trimmed.startsWith('strata:')) continue
+    const payload = trimmed.slice('strata:'.length).trim()
+    if (payload.startsWith('move')) {
+      const dx = Number(payload.match(/dx=(-?\d+(?:\.\d+)?)/)?.[1] ?? 0)
+      const dy = Number(payload.match(/dy=(-?\d+(?:\.\d+)?)/)?.[1] ?? 0)
+      out.push({ type: 'move', entityId, dx, dy })
+    } else if (payload.startsWith('rot')) {
+      const degrees = Number(payload.match(/(-?\d+(?:\.\d+)?)/)?.[1] ?? 0)
+      out.push({ type: 'rot', entityId, degrees })
+    } else if (payload.startsWith('set')) {
+      const x = payload.match(/x=(-?\d+(?:\.\d+)?)/)?.[1]
+      const y = payload.match(/y=(-?\d+(?:\.\d+)?)/)?.[1]
+      const rot = payload.match(/rot=(-?\d+(?:\.\d+)?)/)?.[1]
+      out.push({
+        type: 'set',
+        entityId,
+        x: x !== undefined ? Number(x) : undefined,
+        y: y !== undefined ? Number(y) : undefined,
+        rot: rot !== undefined ? Number(rot) : undefined,
+      })
+    }
+  }
+  return out
+}
+
+/** Browser / fallback preview when RoseGold isn't available. */
+export function previewUpdateDirectives(
+  entities: Entity[],
+  scripts: AssetItem[],
+): StrataDirective[] {
+  const scriptById = new Map(scripts.map((s) => [s.id, s]))
+  const out: StrataDirective[] = []
+  for (const e of entities) {
+    if (!e.scriptId || e.locked) continue
+    const script = scriptById.get(e.scriptId)
+    if (!script?.content || !scriptHasHook(script.content, 'on_update')) continue
+    const embedded = [
+      ...script.content.matchAll(/strata:(?:move|rot|set)[^"'\n]*/g),
+    ].map((m) => m[0])
+    if (embedded.length) {
+      out.push(...parseDirectiveBlock(embedded.join('\n'), e.id))
+      continue
+    }
+    out.push({ type: 'rot', entityId: e.id, degrees: 4 })
+  }
+  return out
+}
+
+export function applyDirectives(
+  entities: Entity[],
+  directives: StrataDirective[],
+): Entity[] {
+  if (!directives.length) return entities
+  const map = new Map(entities.map((e) => [e.id, { ...e }]))
+  for (const d of directives) {
+    const e = map.get(d.entityId)
+    if (!e || e.locked) continue
+    if (d.type === 'move') {
+      e.x = Math.round((e.x + d.dx) * 100) / 100
+      e.y = Math.round((e.y + d.dy) * 100) / 100
+    } else if (d.type === 'rot') {
+      e.rotation = Math.round((e.rotation + d.degrees) * 100) / 100
+    } else if (d.type === 'set') {
+      if (d.x !== undefined) e.x = d.x
+      if (d.y !== undefined) e.y = d.y
+      if (d.rot !== undefined) e.rotation = d.rot
+    }
+  }
+  return entities.map((e) => map.get(e.id) ?? e)
 }
 
 export async function runRoseGoldSource(
@@ -164,6 +285,9 @@ export async function runRoseGoldSource(
 export async function runRoseGoldHooks(
   jobs: HookJob[],
 ): Promise<RoseGoldRunResult> {
+  if (!jobs.length) {
+    return { ok: true, stdout: '', stderr: '', message: 'No hook jobs' }
+  }
   if (!isTauri()) {
     const preview = jobs.map((j) => j.label).join(', ')
     return {

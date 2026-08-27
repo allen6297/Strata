@@ -7,7 +7,11 @@ import { Toolbar } from '@/components/Toolbar'
 import { Viewport } from '@/components/Viewport'
 import { useEntityHistory } from '@/hooks/useEntityHistory'
 import {
-  collectHookJobs,
+  applyDirectives,
+  collectReadyJobs,
+  collectUpdateJobs,
+  parseStrataDirectives,
+  previewUpdateDirectives,
   runRoseGoldHooks,
 } from '@/lib/rosegold'
 import {
@@ -91,11 +95,28 @@ export default function App() {
   const [counters, setCounters] = useState({ sprite: 1, empty: 1, camera: 1 })
   const fileInputRef = useRef<HTMLInputElement>(null)
   const statusTimer = useRef<number | null>(null)
+  const entitiesRefForPlay = useRef(entities)
+  const scriptsRefForPlay = useRef(scripts)
+  entitiesRefForPlay.current = entities
+  scriptsRefForPlay.current = scripts
 
   const assets = useMemo(
     () => [...scripts, ...(diskAssets.length ? diskAssets : STATIC_ASSETS)],
     [scripts, diskAssets],
   )
+
+  const textures = useMemo(
+    () => assets.filter((a) => a.type === 'texture'),
+    [assets],
+  )
+
+  const textureUrlById = useMemo(() => {
+    const map: Record<string, string> = {}
+    for (const t of textures) {
+      if (t.url) map[t.id] = t.url
+    }
+    return map
+  }, [textures])
 
   const projectLabel = useMemo(() => {
     if (!projectPath) return null
@@ -185,6 +206,7 @@ export default function App() {
             if ('visible' in patch) allowed.visible = patch.visible
             if ('locked' in patch) allowed.locked = patch.locked
             if ('scriptId' in patch) allowed.scriptId = patch.scriptId
+            if ('textureId' in patch) allowed.textureId = patch.textureId
             return { ...e, ...allowed }
           }
           return { ...e, ...patch }
@@ -319,25 +341,75 @@ export default function App() {
     }
     setPlaying(true)
     flashStatus('Playing…')
-    const jobs = collectHookJobs(entities, scripts)
+    const jobs = collectReadyJobs(entities, scripts)
     const result = await runRoseGoldHooks(jobs)
     const chunks = [
       result.message,
       result.stdout && `stdout:\n${result.stdout}`,
       result.stderr && `stderr:\n${result.stderr}`,
-      !result.ok ? '(Viewport preview still animates in Play mode.)' : '',
+      'Live on_update running…',
     ].filter(Boolean)
     setPlayLog(chunks.join('\n\n'))
     if (!result.ok) flashStatus(result.message.slice(0, 80))
-    else flashStatus('Hooks ok')
+    else flashStatus('on_ready ok')
   }, [entities, flashStatus, playing, scripts])
+
+  // Live on_update loop while Playing
+  useEffect(() => {
+    if (!playing) return
+    let cancelled = false
+    let tick = 0
+    const DT = 0.25
+
+    const runTick = async () => {
+      tick += 1
+      const snapshot = entitiesRefForPlay.current
+      const scriptSnap = scriptsRefForPlay.current
+      const jobs = collectUpdateJobs(snapshot, scriptSnap, DT)
+      if (!jobs.length) {
+        const preview = previewUpdateDirectives(snapshot, scriptSnap)
+        if (preview.length) {
+          applyTransient((prev) => applyDirectives(prev, preview))
+        }
+        return
+      }
+
+      const result = await runRoseGoldHooks(jobs)
+      if (cancelled) return
+
+      let directives = parseStrataDirectives(result.stdout, jobs)
+      if (!result.ok || !directives.length) {
+        directives = previewUpdateDirectives(snapshot, scriptSnap)
+      }
+      if (directives.length) {
+        applyTransient((prev) => applyDirectives(prev, directives))
+      }
+
+      const line = result.stdout.trim() || result.message
+      if (line) {
+        setPlayLog((prev) => {
+          const next = `${prev}\n\n--- tick ${tick} ---\n${line}`
+          return next.length > 8000 ? next.slice(-8000) : next
+        })
+      }
+    }
+
+    void runTick()
+    const id = window.setInterval(() => {
+      void runTick()
+    }, DT * 1000)
+    return () => {
+      cancelled = true
+      window.clearInterval(id)
+    }
+  }, [playing, applyTransient])
 
   const openProject = useCallback(async () => {
     try {
       const path = await pickProjectDirectory()
       if (!path) return
       const files = await listProjectFiles(path)
-      const mapped = projectFilesToAssets(files)
+      const mapped = await projectFilesToAssets(files)
       setProjectPath(path)
       if (mapped.scripts.length) persistScripts(mapped.scripts)
       setDiskAssets(mapped.assets)
@@ -345,12 +417,24 @@ export default function App() {
         try {
           const doc = parseSceneDocument(JSON.parse(mapped.sceneText))
           const byName = new Map(mapped.scripts.map((s) => [s.name, s.id]))
+          const texByName = new Map(
+            mapped.assets
+              .filter((a) => a.type === 'texture')
+              .map((t) => [t.name, t.id]),
+          )
           const entities = doc.entities.map((e) => {
-            if (!e.scriptId) return e
-            // Remap file:Name.rg or bare names onto loaded script ids
-            const bare = e.scriptId.replace(/^file:(?:.*[\\/])?/, '')
-            const matched = byName.get(bare) ?? byName.get(e.scriptId)
-            return matched ? { ...e, scriptId: matched } : e
+            let next = { ...e }
+            if (e.scriptId) {
+              const bare = e.scriptId.replace(/^file:(?:.*[\\/])?/, '')
+              const matched = byName.get(bare) ?? byName.get(e.scriptId)
+              if (matched) next = { ...next, scriptId: matched }
+            }
+            if (e.textureId) {
+              const bare = e.textureId.replace(/^file:(?:.*[\\/])?/, '')
+              const matched = texByName.get(bare) ?? texByName.get(e.textureId)
+              if (matched) next = { ...next, textureId: matched }
+            }
+            return next
           })
           replace(entities)
           setSceneName(doc.name)
@@ -545,6 +629,7 @@ export default function App() {
             tool={tool}
             playing={playing}
             snap={snap}
+            textureUrlById={textureUrlById}
             onSelect={selectEntity}
             onMoveEntity={onMoveEntity}
             onMoveBegin={beginTransient}
@@ -554,6 +639,15 @@ export default function App() {
             assets={assets}
             selectedId={selectedAssetId}
             onSelect={setSelectedAssetId}
+            onActivate={(asset) => {
+              if (asset.type === 'texture' && primaryId) {
+                updateEntity(primaryId, { textureId: asset.id })
+                flashStatus(`Texture → ${asset.name}`)
+              } else if (asset.type === 'script' && primaryId) {
+                updateEntity(primaryId, { scriptId: asset.id })
+                flashStatus(`Script → ${asset.name}`)
+              }
+            }}
           />
           <ScriptPanel
             script={activeScript}
@@ -568,6 +662,7 @@ export default function App() {
           selectedCount={selectedIds.length}
           entities={entities}
           scripts={scripts}
+          textures={textures}
           onChange={updateEntity}
         />
       </div>

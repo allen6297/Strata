@@ -9,6 +9,7 @@ interface ViewportProps {
   playing: boolean
   snap: boolean
   gridSize?: number
+  textureUrlById: Record<string, string>
   onSelect: (id: string | null, opts?: { additive?: boolean }) => void
   onMoveEntity: (id: string, worldX: number, worldY: number) => void
   onMoveBegin?: () => void
@@ -29,6 +30,7 @@ export function Viewport({
   playing,
   snap,
   gridSize = 16,
+  textureUrlById,
   onSelect,
   onMoveEntity,
   onMoveBegin,
@@ -62,12 +64,26 @@ export function Viewport({
   const playingRef = useRef(playing)
   const snapRef = useRef(snap)
   const gridRef = useRef(gridSize)
+  const textureUrlRef = useRef(textureUrlById)
+  const imageCacheRef = useRef(new Map<string, HTMLImageElement>())
 
   entitiesRef.current = entities
   selectedRef.current = selectedIds
   playingRef.current = playing
   snapRef.current = snap
   gridRef.current = gridSize
+  textureUrlRef.current = textureUrlById
+
+  // Warm image cache when texture URLs change
+  useEffect(() => {
+    for (const [id, url] of Object.entries(textureUrlById)) {
+      if (!url || imageCacheRef.current.has(id)) continue
+      const img = new Image()
+      img.decoding = 'async'
+      img.src = url
+      imageCacheRef.current.set(id, img)
+    }
+  }, [textureUrlById])
 
   useEffect(() => {
     const canvas = canvasRef.current
@@ -199,8 +215,14 @@ export function Viewport({
         ctx.rotate((e.rotation * Math.PI) / 180)
 
         if (e.kind === 'sprite') {
-          ctx.fillStyle = e.color
-          ctx.fillRect(-e.width / 2, -e.height / 2, e.width, e.height)
+          const texId = e.textureId
+          const img = texId ? imageCacheRef.current.get(texId) : undefined
+          if (img && img.complete && img.naturalWidth > 0) {
+            ctx.drawImage(img, -e.width / 2, -e.height / 2, e.width, e.height)
+          } else {
+            ctx.fillStyle = e.color
+            ctx.fillRect(-e.width / 2, -e.height / 2, e.width, e.height)
+          }
           ctx.strokeStyle = 'rgba(255,255,255,0.12)'
           ctx.lineWidth = 1 / cam.zoom
           ctx.strokeRect(-e.width / 2, -e.height / 2, e.width, e.height)

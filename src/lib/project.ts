@@ -20,7 +20,6 @@ export async function pickProjectDirectory(): Promise<string | null> {
     return typeof selected === 'string' ? selected : null
   }
 
-  // Browser File System Access API
   const w = window as Window & {
     showDirectoryPicker?: () => Promise<FileSystemDirectoryHandle>
   }
@@ -30,7 +29,6 @@ export async function pickProjectDirectory(): Promise<string | null> {
     )
   }
   const handle = await w.showDirectoryPicker()
-  // Browser can't give a real OS path — use a virtual marker + handle cache
   browserDirHandle = handle
   return `browser:${handle.name}`
 }
@@ -94,11 +92,48 @@ export async function writeProjectFile(
   await invoke('write_project_file', { path, contents })
 }
 
-export function projectFilesToAssets(files: ProjectFile[]): {
+function mimeForName(name: string): string {
+  const lower = name.toLowerCase()
+  if (lower.endsWith('.png')) return 'image/png'
+  if (lower.endsWith('.jpg') || lower.endsWith('.jpeg')) return 'image/jpeg'
+  if (lower.endsWith('.webp')) return 'image/webp'
+  if (lower.endsWith('.gif')) return 'image/gif'
+  return 'application/octet-stream'
+}
+
+export async function resolveTextureUrl(
+  path: string,
+  name: string,
+): Promise<string | undefined> {
+  if (path.startsWith('browser:')) {
+    if (!browserDirHandle) return undefined
+    const fileName = path.split('/').pop()!
+    const handle = await browserDirHandle.getFileHandle(fileName)
+    const file = await handle.getFile()
+    return URL.createObjectURL(file)
+  }
+  if (isTauri()) {
+    try {
+      const { invoke } = await import('@tauri-apps/api/core')
+      const b64 = await invoke<string>('read_file_base64', { path })
+      return `data:${mimeForName(name)};base64,${b64}`
+    } catch {
+      try {
+        const { convertFileSrc } = await import('@tauri-apps/api/core')
+        return convertFileSrc(path)
+      } catch {
+        return undefined
+      }
+    }
+  }
+  return undefined
+}
+
+export async function projectFilesToAssets(files: ProjectFile[]): Promise<{
   scripts: AssetItem[]
   assets: AssetItem[]
   sceneText: string | null
-} {
+}> {
   const scripts: AssetItem[] = []
   const assets: AssetItem[] = []
   let sceneText: string | null = null
@@ -112,6 +147,7 @@ export function projectFilesToAssets(files: ProjectFile[]): {
         language: 'rosegold',
         content: f.content ?? '',
         size: `${f.size} B`,
+        path: f.path,
       })
     } else if (f.kind === 'scene' && f.name.endsWith('.scene')) {
       sceneText = f.content ?? null
@@ -121,13 +157,25 @@ export function projectFilesToAssets(files: ProjectFile[]): {
         type: 'scene',
         size: `${f.size} B`,
         content: f.content ?? undefined,
+        path: f.path,
       })
-    } else if (f.kind === 'texture' || f.kind === 'audio' || f.kind === 'scene') {
+    } else if (f.kind === 'texture') {
+      const url = await resolveTextureUrl(f.path, f.name)
+      assets.push({
+        id: `file:${f.path}`,
+        name: f.name,
+        type: 'texture',
+        size: `${f.size} B`,
+        path: f.path,
+        url,
+      })
+    } else if (f.kind === 'audio' || f.kind === 'scene') {
       assets.push({
         id: `file:${f.path}`,
         name: f.name,
         type: f.kind as AssetItem['type'],
         size: `${f.size} B`,
+        path: f.path,
       })
     }
   }

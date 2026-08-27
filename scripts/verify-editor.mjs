@@ -5,30 +5,30 @@ async function main() {
   const page = await browser.newPage({ viewport: { width: 1440, height: 960 } })
   await page.goto('http://127.0.0.1:4521/', { waitUntil: 'networkidle' })
 
-  // Multi-select via hierarchy
+  // Clear stale localStorage scene without textures/hooks
+  await page.evaluate(() => {
+    localStorage.clear()
+  })
+  await page.reload({ waitUntil: 'networkidle' })
+
   await page.getByTestId('hierarchy-ent_player').click()
-  await page.getByTestId('hierarchy-ent_platform').click({ modifiers: ['Meta'] })
-  await page.waitForTimeout(100)
+  const x0 = await page.getByTestId('inspector-x').inputValue()
 
-  // Parenting: unparent coin if needed then parent via inspector
-  await page.getByTestId('hierarchy-ent_coin').click()
-  await page.getByTestId('inspector-parent').selectOption('ent_player')
-  await page.waitForTimeout(100)
-
-  // Script attach + edit
-  await page.getByTestId('asset-scr_player').click()
-  await page.getByTestId('script-editor').fill(`fn main(): Int {\n    print("strata test");\n    return 0;\n}\n`)
   await page.getByTestId('play-toggle').click()
-  await page.waitForTimeout(400)
+  await page.waitForTimeout(900)
+  const x1 = await page.getByTestId('inspector-x').inputValue()
   const log = await page.getByTestId('play-log').innerText()
 
+  await page.getByTestId('play-toggle').click()
+
   await page.screenshot({
-    path: '/opt/cursor/artifacts/strata_scripts_parenting.png',
+    path: '/opt/cursor/artifacts/strata_live_play_textures.png',
     fullPage: true,
   })
 
-  const ok = log.includes('RoseGold') || log.includes('Play') || log.includes('desktop')
-  console.log({ log: log.slice(0, 200), ok })
+  const moved = Number(x1) !== Number(x0)
+  const ok = moved && (log.includes('tick') || log.includes('ready') || log.includes('Would run') || log.includes('Live'))
+  console.log({ x0, x1, moved, log: log.slice(0, 240), ok })
   await browser.close()
   process.exit(ok ? 0 : 1)
 }

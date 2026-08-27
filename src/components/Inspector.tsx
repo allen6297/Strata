@@ -8,6 +8,7 @@ interface InspectorProps {
   selectedCount: number
   entities: Entity[]
   scripts: AssetItem[]
+  textures: AssetItem[]
   onChange: (id: string, patch: Partial<Entity>) => void
 }
 
@@ -57,6 +58,7 @@ export function Inspector({
   selectedCount,
   entities,
   scripts,
+  textures,
   onChange,
 }: InspectorProps) {
   if (!entity) {
@@ -118,6 +120,24 @@ export function Inspector({
             {parentOptions.map((p) => (
               <option key={p.id} value={p.id}>
                 {p.name}
+              </option>
+            ))}
+          </select>
+        </Field>
+
+        <Field label="Texture">
+          <select
+            className="h-7 w-full rounded-md border border-[var(--border)] bg-[var(--bg-input)] px-2 text-xs text-[var(--text)] outline-none focus:border-[var(--accent-dim)]"
+            value={entity.textureId ?? ''}
+            data-testid="inspector-texture"
+            onChange={(e) =>
+              patch({ textureId: e.target.value ? e.target.value : null })
+            }
+          >
+            <option value="">None (solid color)</option>
+            {textures.map((t) => (
+              <option key={t.id} value={t.id}>
+                {t.name}
               </option>
             ))}
           </select>

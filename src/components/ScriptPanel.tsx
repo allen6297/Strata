@@ -46,7 +46,7 @@ export function ScriptPanel({
             if (script) onChangeContent(script.id, e.target.value)
           }}
           placeholder={
-            'RoseGold hooks:\n  fn on_ready(name, x, y)\n  fn on_update(name, x, y, dt)\n\nSelect a .rg asset or create a new script.'
+            'Hooks + motion directives:\n  on_ready / on_update\n  print("strata:move dx=1 dy=0")\n  print("strata:rot 8")\n  print("strata:set x=0 y=0")'
           }
           className="min-h-0 resize-none border-0 border-r border-[var(--border)] bg-[var(--bg-input)] p-3 font-mono text-xs leading-relaxed text-[var(--text)] outline-none placeholder:text-[var(--text-muted)]"
         />
