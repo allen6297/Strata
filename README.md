@@ -1,8 +1,8 @@
-# Forge — Scene Editor
+# Strata — Scene Editor
 
 A lightweight **2D game engine editor** UI: hierarchy, canvas viewport, inspector, and asset browser.
 
-Built with Vite, React, TypeScript, and Tailwind. Designed as a desktop-style editor shell you can later wrap with Tauri.
+Intended local path: `usr/kalob/CODE/Strata`. Built with Vite, React, TypeScript, and Tailwind. Designed as a desktop-style editor shell you can later wrap with Tauri.
 
 ## Run locally
 
@@ -16,18 +16,18 @@ Open the URL Vite prints (default [http://127.0.0.1:4521](http://127.0.0.1:4521)
 ## What you can do
 
 - **Hierarchy** — select entities, toggle visibility/lock
-- **Viewport** — pan (hand tool / empty drag / Alt), zoom (scroll), drag sprites to move
+- **Viewport** — pan (hand tool / Alt / middle mouse), zoom (scroll), drag sprites to move
 - **Inspector** — edit name, transform, color, visibility, lock
 - **Toolbar** — add Sprite / Empty / Camera, delete selection, Play/Stop preview bob
 - **Assets** — browse mock project textures, scripts, audio, and scenes
 
 ## Scripts
 
-| Command        | Description              |
-|----------------|--------------------------|
-| `npm run dev`  | Start the editor         |
-| `npm run build`| Production build         |
-| `npm run preview` | Preview production build |
+| Command           | Description                |
+|-------------------|----------------------------|
+| `npm run dev`     | Start the editor           |
+| `npm run build`   | Production build           |
+| `npm run preview` | Preview production build   |
 
 ## Stack note
 

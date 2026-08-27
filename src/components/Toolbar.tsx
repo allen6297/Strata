@@ -43,7 +43,7 @@ export function Toolbar({
           <Box className="h-4 w-4" strokeWidth={2.5} />
         </div>
         <div className="leading-tight">
-          <div className="text-sm font-semibold tracking-tight">Forge</div>
+          <div className="text-sm font-semibold tracking-tight">Strata</div>
           <div className="font-mono text-[10px] text-[var(--text-muted)]">
             Scene Editor
           </div>
