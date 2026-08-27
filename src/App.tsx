@@ -2,22 +2,35 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { AssetBrowser } from '@/components/AssetBrowser'
 import { Hierarchy } from '@/components/Hierarchy'
 import { Inspector } from '@/components/Inspector'
+import { ScriptPanel } from '@/components/ScriptPanel'
 import { Toolbar } from '@/components/Toolbar'
 import { Viewport } from '@/components/Viewport'
 import { useEntityHistory } from '@/hooks/useEntityHistory'
+import { buildPlayDriver, runRoseGoldSource } from '@/lib/rosegold'
 import {
-  ASSETS,
   createDefaultEntities,
+  createDefaultScripts,
   createEntity,
   DEFAULT_SCENE_NAME,
   downloadScene,
   duplicateEntity,
   loadSceneFromStorage,
+  loadScriptsFromStorage,
   parseSceneDocument,
   saveSceneToStorage,
+  saveScriptsToStorage,
+  STATIC_ASSETS,
   toSceneDocument,
 } from '@/lib/scene'
-import type { Entity, EntityKind, ToolMode } from '@/types/scene'
+import {
+  collectSubtreeIds,
+  entityMap,
+  flattenHierarchy,
+  wouldCreateCycle,
+  worldToLocal,
+} from '@/lib/transforms'
+import { uid } from '@/lib/utils'
+import type { AssetItem, Entity, EntityKind, ToolMode } from '@/types/scene'
 
 function bootEntities() {
   return loadSceneFromStorage()?.entities ?? createDefaultEntities()
@@ -25,6 +38,12 @@ function bootEntities() {
 
 function bootName() {
   return loadSceneFromStorage()?.name ?? DEFAULT_SCENE_NAME
+}
+
+function bootScripts(): AssetItem[] {
+  const fromScene = loadSceneFromStorage()?.scripts
+  if (fromScene?.length) return fromScene
+  return loadScriptsFromStorage() ?? createDefaultScripts()
 }
 
 export default function App() {
@@ -42,34 +61,92 @@ export default function App() {
     canRedo,
   } = history
 
-  const [selectedId, setSelectedId] = useState<string | null>(
-    () => bootEntities()[0]?.id ?? null,
-  )
+  const [selectedIds, setSelectedIds] = useState<string[]>(() => {
+    const first = bootEntities()[0]?.id
+    return first ? [first] : []
+  })
   const [tool, setTool] = useState<ToolMode>('select')
   const [playing, setPlaying] = useState(false)
-  const [selectedAssetId, setSelectedAssetId] = useState<string | null>('a1')
+  const [scripts, setScripts] = useState<AssetItem[]>(bootScripts)
+  const [selectedAssetId, setSelectedAssetId] = useState<string | null>(
+    'scr_player',
+  )
   const [sceneName, setSceneName] = useState(bootName)
   const [dirty, setDirty] = useState(false)
   const [status, setStatus] = useState<string | null>(null)
+  const [playLog, setPlayLog] = useState('')
   const [counters, setCounters] = useState({ sprite: 1, empty: 1, camera: 1 })
   const fileInputRef = useRef<HTMLInputElement>(null)
   const statusTimer = useRef<number | null>(null)
 
-  const selected = useMemo(
-    () => entities.find((e) => e.id === selectedId) ?? null,
-    [entities, selectedId],
+  const assets = useMemo(
+    () => [...scripts, ...STATIC_ASSETS],
+    [scripts],
   )
+
+  const primaryId = selectedIds[selectedIds.length - 1] ?? null
+  const selected = useMemo(
+    () => entities.find((e) => e.id === primaryId) ?? null,
+    [entities, primaryId],
+  )
+  const activeScript = useMemo(() => {
+    const fromAsset = scripts.find((s) => s.id === selectedAssetId)
+    if (fromAsset) return fromAsset
+    if (selected?.scriptId) {
+      return scripts.find((s) => s.id === selected.scriptId) ?? null
+    }
+    return null
+  }, [scripts, selectedAssetId, selected])
 
   const flashStatus = useCallback((message: string) => {
     setStatus(message)
     if (statusTimer.current) window.clearTimeout(statusTimer.current)
-    statusTimer.current = window.setTimeout(() => setStatus(null), 2200)
+    statusTimer.current = window.setTimeout(() => setStatus(null), 2800)
   }, [])
 
   const markDirty = useCallback(() => setDirty(true), [])
 
+  const persistScripts = useCallback((next: AssetItem[]) => {
+    setScripts(next)
+    saveScriptsToStorage(next)
+  }, [])
+
+  const selectEntity = useCallback(
+    (id: string | null, opts?: { additive?: boolean; range?: boolean }) => {
+      if (!id) {
+        setSelectedIds([])
+        return
+      }
+      setSelectedIds((prev) => {
+        if (opts?.range && prev.length) {
+          const order = flattenHierarchy(entities).map((r) => r.entity.id)
+          const anchor = prev[0]
+          const a = order.indexOf(anchor)
+          const b = order.indexOf(id)
+          if (a >= 0 && b >= 0) {
+            const [lo, hi] = a < b ? [a, b] : [b, a]
+            return order.slice(lo, hi + 1)
+          }
+        }
+        if (opts?.additive) {
+          if (prev.includes(id)) return prev.filter((x) => x !== id)
+          return [...prev, id]
+        }
+        return [id]
+      })
+    },
+    [entities],
+  )
+
   const updateEntity = useCallback(
     (id: string, patch: Partial<Entity>) => {
+      if ('parentId' in patch) {
+        const nextParent = patch.parentId ?? null
+        if (wouldCreateCycle(entities, id, nextParent)) {
+          flashStatus('Cannot parent: would create a cycle')
+          return
+        }
+      }
       commit((prev) =>
         prev.map((e) => {
           if (e.id !== id) return e
@@ -81,11 +158,13 @@ export default function App() {
               'height' in patch ||
               'rotation' in patch ||
               'color' in patch ||
-              'name' in patch)
+              'name' in patch ||
+              'parentId' in patch)
           ) {
             const allowed: Partial<Entity> = {}
             if ('visible' in patch) allowed.visible = patch.visible
             if ('locked' in patch) allowed.locked = patch.locked
+            if ('scriptId' in patch) allowed.scriptId = patch.scriptId
             return { ...e, ...allowed }
           }
           return { ...e, ...patch }
@@ -93,30 +172,44 @@ export default function App() {
       )
       markDirty()
     },
-    [commit, markDirty],
+    [commit, entities, flashStatus, markDirty],
   )
 
   const onMoveEntity = useCallback(
-    (id: string, x: number, y: number) => {
-      applyTransient((prev) =>
-        prev.map((e) => {
+    (id: string, worldX: number, worldY: number) => {
+      applyTransient((prev) => {
+        const byId = entityMap(prev)
+        return prev.map((e) => {
           if (e.id !== id || e.locked) return e
-          return { ...e, x, y }
-        }),
-      )
+          const local = worldToLocal(e, worldX, worldY, byId)
+          return { ...e, x: local.x, y: local.y }
+        })
+      })
       markDirty()
     },
     [applyTransient, markDirty],
   )
 
+  const reparent = useCallback(
+    (childId: string, parentId: string | null) => {
+      if (wouldCreateCycle(entities, childId, parentId)) {
+        flashStatus('Cannot parent: would create a cycle')
+        return
+      }
+      updateEntity(childId, { parentId })
+    },
+    [entities, flashStatus, updateEntity],
+  )
+
   const addEntity = useCallback(
     (kind: EntityKind) => {
-      const key = kind === 'sprite' ? 'sprite' : kind === 'camera' ? 'camera' : 'empty'
+      const key =
+        kind === 'sprite' ? 'sprite' : kind === 'camera' ? 'camera' : 'empty'
       const nextIndex = counters[key]
       const entity = createEntity(kind, nextIndex)
       setCounters((c) => ({ ...c, [key]: nextIndex + 1 }))
       commit((prev) => [...prev, entity])
-      setSelectedId(entity.id)
+      setSelectedIds([entity.id])
       setTool('select')
       markDirty()
     },
@@ -124,27 +217,45 @@ export default function App() {
   )
 
   const deleteSelected = useCallback(() => {
-    if (!selectedId) return
-    commit((prev) => prev.filter((e) => e.id !== selectedId))
-    setSelectedId(null)
+    if (!selectedIds.length) return
+    const remove = new Set<string>()
+    for (const id of selectedIds) {
+      for (const sid of collectSubtreeIds(entities, id)) remove.add(sid)
+    }
+    commit((prev) =>
+      prev
+        .filter((e) => !remove.has(e.id))
+        .map((e) =>
+          e.parentId && remove.has(e.parentId)
+            ? { ...e, parentId: null }
+            : e,
+        ),
+    )
+    setSelectedIds([])
     markDirty()
-  }, [commit, markDirty, selectedId])
+  }, [commit, entities, markDirty, selectedIds])
 
   const duplicateSelected = useCallback(() => {
-    if (!selected) return
-    const copy = duplicateEntity(selected)
-    commit((prev) => [...prev, copy])
-    setSelectedId(copy.id)
+    if (!selectedIds.length) return
+    const copies: Entity[] = []
+    for (const id of selectedIds) {
+      const src = entities.find((e) => e.id === id)
+      if (src) copies.push(duplicateEntity(src))
+    }
+    if (!copies.length) return
+    commit((prev) => [...prev, ...copies])
+    setSelectedIds(copies.map((c) => c.id))
     markDirty()
-  }, [commit, markDirty, selected])
+  }, [commit, entities, markDirty, selectedIds])
 
   const saveScene = useCallback(() => {
-    const doc = toSceneDocument(sceneName, entities)
+    const doc = toSceneDocument(sceneName, entities, scripts)
     saveSceneToStorage(doc)
+    saveScriptsToStorage(scripts)
     downloadScene(doc)
     setDirty(false)
     flashStatus('Saved')
-  }, [entities, flashStatus, sceneName])
+  }, [entities, flashStatus, sceneName, scripts])
 
   const openScenePicker = useCallback(() => {
     fileInputRef.current?.click()
@@ -158,7 +269,8 @@ export default function App() {
         const doc = parseSceneDocument(JSON.parse(text))
         replace(doc.entities)
         setSceneName(doc.name)
-        setSelectedId(doc.entities[0]?.id ?? null)
+        if (doc.scripts?.length) persistScripts(doc.scripts)
+        setSelectedIds(doc.entities[0]?.id ? [doc.entities[0].id] : [])
         setDirty(false)
         saveSceneToStorage(doc)
         flashStatus('Opened')
@@ -166,7 +278,7 @@ export default function App() {
         flashStatus(err instanceof Error ? err.message : 'Failed to open')
       }
     },
-    [flashStatus, replace],
+    [flashStatus, persistScripts, replace],
   )
 
   const handleUndo = useCallback(() => {
@@ -178,6 +290,55 @@ export default function App() {
     redo()
     markDirty()
   }, [markDirty, redo])
+
+  const togglePlay = useCallback(async () => {
+    if (playing) {
+      setPlaying(false)
+      flashStatus('Stopped')
+      return
+    }
+    setPlaying(true)
+    flashStatus('Playing…')
+    const driver = buildPlayDriver(entities, scripts)
+    const result = await runRoseGoldSource(driver)
+    const chunks = [
+      result.message,
+      result.stdout && `stdout:\n${result.stdout}`,
+      result.stderr && `stderr:\n${result.stderr}`,
+      !result.ok ? '(Viewport preview still animates in Play mode.)' : '',
+    ].filter(Boolean)
+    setPlayLog(chunks.join('\n\n'))
+    if (!result.ok) flashStatus(result.message.slice(0, 80))
+    else flashStatus('RoseGold ok')
+  }, [entities, flashStatus, playing, scripts])
+
+  const createScript = useCallback(() => {
+    const id = uid('scr')
+    const next: AssetItem = {
+      id,
+      name: `Script${scripts.length + 1}.rg`,
+      type: 'script',
+      language: 'rosegold',
+      content: `fn main(): Int {\n    print("hello from Strata");\n    return 0;\n}\n`,
+      size: '64 B',
+    }
+    next.size = `${next.content!.length} B`
+    persistScripts([...scripts, next])
+    setSelectedAssetId(id)
+    markDirty()
+  }, [markDirty, persistScripts, scripts])
+
+  const updateScriptContent = useCallback(
+    (id: string, content: string) => {
+      persistScripts(
+        scripts.map((s) =>
+          s.id === id ? { ...s, content, size: `${content.length} B` } : s,
+        ),
+      )
+      markDirty()
+    },
+    [markDirty, persistScripts, scripts],
+  )
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -221,7 +382,7 @@ export default function App() {
       }
       if (e.key === ' ') {
         e.preventDefault()
-        setPlaying((p) => !p)
+        void togglePlay()
       }
     }
     window.addEventListener('keydown', onKeyDown)
@@ -232,6 +393,7 @@ export default function App() {
     handleRedo,
     handleUndo,
     saveScene,
+    togglePlay,
   ])
 
   return (
@@ -242,12 +404,12 @@ export default function App() {
         sceneName={sceneName}
         dirty={dirty}
         status={status}
-        canDelete={Boolean(selectedId)}
-        canDuplicate={Boolean(selected)}
+        canDelete={selectedIds.length > 0}
+        canDuplicate={selectedIds.length > 0}
         canUndo={canUndo}
         canRedo={canRedo}
         onToolChange={setTool}
-        onPlayToggle={() => setPlaying((p) => !p)}
+        onPlayToggle={() => void togglePlay()}
         onAddSprite={() => addEntity('sprite')}
         onAddEmpty={() => addEntity('empty')}
         onAddCamera={() => addEntity('camera')}
@@ -274,8 +436,9 @@ export default function App() {
       <div className="flex min-h-0 flex-1">
         <Hierarchy
           entities={entities}
-          selectedId={selectedId}
-          onSelect={setSelectedId}
+          selectedIds={selectedIds}
+          onSelect={selectEntity}
+          onReparent={reparent}
           onToggleVisible={(id) => {
             const e = entities.find((x) => x.id === id)
             if (e) updateEntity(id, { visible: !e.visible })
@@ -289,22 +452,34 @@ export default function App() {
         <div className="flex min-h-0 min-w-0 flex-1 flex-col">
           <Viewport
             entities={entities}
-            selectedId={selectedId}
+            selectedIds={selectedIds}
             tool={tool}
             playing={playing}
-            onSelect={setSelectedId}
+            onSelect={selectEntity}
             onMoveEntity={onMoveEntity}
             onMoveBegin={beginTransient}
             onMoveEnd={endTransient}
           />
           <AssetBrowser
-            assets={ASSETS}
+            assets={assets}
             selectedId={selectedAssetId}
             onSelect={setSelectedAssetId}
           />
+          <ScriptPanel
+            script={activeScript}
+            playLog={playLog}
+            onChangeContent={updateScriptContent}
+            onCreateScript={createScript}
+          />
         </div>
 
-        <Inspector entity={selected} onChange={updateEntity} />
+        <Inspector
+          entity={selected}
+          selectedCount={selectedIds.length}
+          entities={entities}
+          scripts={scripts}
+          onChange={updateEntity}
+        />
       </div>
     </div>
   )

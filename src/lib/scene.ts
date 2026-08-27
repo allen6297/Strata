@@ -1,18 +1,47 @@
+import { DEFAULT_PLAYER_SCRIPT } from '@/lib/rosegold'
 import { uid } from '@/lib/utils'
-import type { Entity, EntityKind, SceneDocument } from '@/types/scene'
+import type { AssetItem, Entity, EntityKind, SceneDocument } from '@/types/scene'
+import { SCRIPTS_STORAGE_KEY } from '@/types/scene'
 
 const COLORS = ['#3db8a8', '#e06c75', '#61afef', '#c678dd', '#e5c07b', '#98c379']
 
 export const DEFAULT_SCENE_NAME = 'main.scene'
 
-export const ASSETS = [
-  { id: 'a1', name: 'player.png', type: 'texture' as const, size: '64×64' },
-  { id: 'a2', name: 'tileset.png', type: 'texture' as const, size: '256×256' },
-  { id: 'a3', name: 'PlayerController.ts', type: 'script' as const, size: '2.1 KB' },
-  { id: 'a4', name: 'jump.wav', type: 'audio' as const, size: '48 KB' },
-  { id: 'a5', name: 'main.scene', type: 'scene' as const, size: '1.4 KB' },
-  { id: 'a6', name: 'coin.png', type: 'texture' as const, size: '32×32' },
+export const STATIC_ASSETS: AssetItem[] = [
+  { id: 'a1', name: 'player.png', type: 'texture', size: '64×64' },
+  { id: 'a2', name: 'tileset.png', type: 'texture', size: '256×256' },
+  { id: 'a4', name: 'jump.wav', type: 'audio', size: '48 KB' },
+  { id: 'a5', name: 'main.scene', type: 'scene', size: '1.4 KB' },
+  { id: 'a6', name: 'coin.png', type: 'texture', size: '32×32' },
 ]
+
+export function createDefaultScripts(): AssetItem[] {
+  return [
+    {
+      id: 'scr_player',
+      name: 'PlayerController.rg',
+      type: 'script',
+      language: 'rosegold',
+      size: `${DEFAULT_PLAYER_SCRIPT.length} B`,
+      content: DEFAULT_PLAYER_SCRIPT,
+    },
+    {
+      id: 'scr_coin',
+      name: 'CoinSpin.rg',
+      type: 'script',
+      language: 'rosegold',
+      size: '120 B',
+      content: `fn main(): Int {
+    print("[Strata] CoinSpin");
+    return 0;
+}
+`,
+    },
+  ]
+}
+
+/** @deprecated use STATIC_ASSETS + scripts */
+export const ASSETS = STATIC_ASSETS
 
 export function createDefaultEntities(): Entity[] {
   return [
@@ -21,6 +50,7 @@ export function createDefaultEntities(): Entity[] {
       name: 'Player',
       kind: 'sprite',
       parentId: null,
+      scriptId: 'scr_player',
       x: 0,
       y: 0,
       width: 64,
@@ -35,6 +65,7 @@ export function createDefaultEntities(): Entity[] {
       name: 'Platform',
       kind: 'sprite',
       parentId: null,
+      scriptId: null,
       x: 40,
       y: 120,
       width: 220,
@@ -48,7 +79,8 @@ export function createDefaultEntities(): Entity[] {
       id: 'ent_coin',
       name: 'Coin',
       kind: 'sprite',
-      parentId: null,
+      parentId: 'ent_player',
+      scriptId: 'scr_coin',
       x: -90,
       y: -40,
       width: 28,
@@ -63,6 +95,7 @@ export function createDefaultEntities(): Entity[] {
       name: 'Main Camera',
       kind: 'camera',
       parentId: null,
+      scriptId: null,
       x: 0,
       y: -20,
       width: 160,
@@ -92,6 +125,7 @@ export function createEntity(kind: EntityKind, index: number): Entity {
     name: `${kind[0].toUpperCase()}${kind.slice(1)} ${index}`,
     kind,
     parentId: null,
+    scriptId: null,
     x: Math.round((Math.random() - 0.5) * 200),
     y: Math.round((Math.random() - 0.5) * 140),
     rotation: 0,
@@ -115,8 +149,35 @@ export function duplicateEntity(entity: Entity): Entity {
 export function toSceneDocument(
   name: string,
   entities: Entity[],
+  scripts: AssetItem[] = [],
 ): SceneDocument {
-  return { version: 1, name, entities }
+  return {
+    version: 1,
+    name,
+    entities,
+    scripts: scripts.filter((s) => s.type === 'script'),
+  }
+}
+
+function normalizeEntity(raw: Partial<Entity>, i: number): Entity {
+  if (!raw || typeof raw !== 'object' || typeof raw.id !== 'string') {
+    throw new Error(`Entity ${i} is invalid`)
+  }
+  return {
+    id: raw.id,
+    name: typeof raw.name === 'string' ? raw.name : `Entity ${i}`,
+    kind: (raw.kind as Entity['kind']) || 'empty',
+    parentId: raw.parentId ?? null,
+    scriptId: raw.scriptId ?? null,
+    x: Number(raw.x) || 0,
+    y: Number(raw.y) || 0,
+    width: Math.max(8, Number(raw.width) || 32),
+    height: Math.max(8, Number(raw.height) || 32),
+    rotation: Number(raw.rotation) || 0,
+    color: typeof raw.color === 'string' ? raw.color : '#3db8a8',
+    visible: raw.visible !== false,
+    locked: Boolean(raw.locked),
+  }
 }
 
 export function parseSceneDocument(data: unknown): SceneDocument {
@@ -127,26 +188,19 @@ export function parseSceneDocument(data: unknown): SceneDocument {
   if (doc.version !== 1 || !Array.isArray(doc.entities)) {
     throw new Error('Unsupported or invalid Strata scene')
   }
-  const entities = doc.entities.map((raw, i) => {
-    const e = raw as Partial<Entity>
-    if (!e || typeof e !== 'object' || typeof e.id !== 'string') {
-      throw new Error(`Entity ${i} is invalid`)
-    }
-    return {
-      id: e.id,
-      name: typeof e.name === 'string' ? e.name : `Entity ${i}`,
-      kind: (e.kind as Entity['kind']) || 'empty',
-      parentId: e.parentId ?? null,
-      x: Number(e.x) || 0,
-      y: Number(e.y) || 0,
-      width: Math.max(8, Number(e.width) || 32),
-      height: Math.max(8, Number(e.height) || 32),
-      rotation: Number(e.rotation) || 0,
-      color: typeof e.color === 'string' ? e.color : '#3db8a8',
-      visible: e.visible !== false,
-      locked: Boolean(e.locked),
-    } satisfies Entity
-  })
+  const entities = doc.entities.map((raw, i) =>
+    normalizeEntity(raw as Partial<Entity>, i),
+  )
+  const scripts = Array.isArray(doc.scripts)
+    ? doc.scripts
+        .filter((s) => s && s.type === 'script')
+        .map((s) => ({
+          ...s,
+          language: s.language ?? ('rosegold' as const),
+          content: s.content ?? '',
+          size: s.size || `${(s.content ?? '').length} B`,
+        }))
+    : undefined
   return {
     version: 1,
     name:
@@ -154,6 +208,7 @@ export function parseSceneDocument(data: unknown): SceneDocument {
         ? doc.name
         : DEFAULT_SCENE_NAME,
     entities,
+    scripts,
   }
 }
 
@@ -181,4 +236,20 @@ export function loadSceneFromStorage(): SceneDocument | null {
 
 export function saveSceneToStorage(doc: SceneDocument) {
   localStorage.setItem('strata.scene.v1', JSON.stringify(doc))
+}
+
+export function loadScriptsFromStorage(): AssetItem[] | null {
+  try {
+    const raw = localStorage.getItem(SCRIPTS_STORAGE_KEY)
+    if (!raw) return null
+    const parsed = JSON.parse(raw) as AssetItem[]
+    if (!Array.isArray(parsed)) return null
+    return parsed
+  } catch {
+    return null
+  }
+}
+
+export function saveScriptsToStorage(scripts: AssetItem[]) {
+  localStorage.setItem(SCRIPTS_STORAGE_KEY, JSON.stringify(scripts))
 }

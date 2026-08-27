@@ -1,10 +1,13 @@
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import type { Entity } from '@/types/scene'
+import type { AssetItem, Entity } from '@/types/scene'
 import type { ReactNode } from 'react'
 
 interface InspectorProps {
   entity: Entity | null
+  selectedCount: number
+  entities: Entity[]
+  scripts: AssetItem[]
   onChange: (id: string, patch: Partial<Entity>) => void
 }
 
@@ -49,7 +52,13 @@ function NumInput({
   )
 }
 
-export function Inspector({ entity, onChange }: InspectorProps) {
+export function Inspector({
+  entity,
+  selectedCount,
+  entities,
+  scripts,
+  onChange,
+}: InspectorProps) {
   if (!entity) {
     return (
       <aside className="panel-animate flex h-full w-64 shrink-0 flex-col border-l border-[var(--border)] bg-[var(--bg-panel)]">
@@ -67,6 +76,7 @@ export function Inspector({ entity, onChange }: InspectorProps) {
 
   const patch = (p: Partial<Entity>) => onChange(entity.id, p)
   const disabled = entity.locked
+  const parentOptions = entities.filter((e) => e.id !== entity.id)
 
   return (
     <aside className="panel-animate flex h-full min-h-0 w-64 shrink-0 flex-col border-l border-[var(--border)] bg-[var(--bg-panel)]">
@@ -75,11 +85,17 @@ export function Inspector({ entity, onChange }: InspectorProps) {
           Inspector
         </h2>
         <span className="ml-auto rounded bg-[var(--bg-panel-raised)] px-1.5 py-0.5 font-mono text-[10px] uppercase text-[var(--text-muted)]">
-          {entity.kind}
+          {selectedCount > 1 ? `${selectedCount} sel` : entity.kind}
         </span>
       </div>
 
       <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-3">
+        {selectedCount > 1 && (
+          <p className="rounded-md border border-[var(--border)] bg-[var(--bg-panel-raised)] px-2 py-1.5 text-[11px] text-[var(--text-muted)]">
+            Editing primary selection. Delete/Duplicate apply to all selected.
+          </p>
+        )}
+
         <Field label="Name">
           <Input
             value={entity.name}
@@ -88,8 +104,47 @@ export function Inspector({ entity, onChange }: InspectorProps) {
           />
         </Field>
 
+        <Field label="Parent">
+          <select
+            className="h-7 w-full rounded-md border border-[var(--border)] bg-[var(--bg-input)] px-2 text-xs text-[var(--text)] outline-none focus:border-[var(--accent-dim)]"
+            value={entity.parentId ?? ''}
+            disabled={disabled}
+            data-testid="inspector-parent"
+            onChange={(e) =>
+              patch({ parentId: e.target.value ? e.target.value : null })
+            }
+          >
+            <option value="">None (root)</option>
+            {parentOptions.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name}
+              </option>
+            ))}
+          </select>
+        </Field>
+
+        <Field label="RoseGold script">
+          <select
+            className="h-7 w-full rounded-md border border-[var(--border)] bg-[var(--bg-input)] px-2 text-xs text-[var(--text)] outline-none focus:border-[var(--accent-dim)]"
+            value={entity.scriptId ?? ''}
+            data-testid="inspector-script"
+            onChange={(e) =>
+              patch({ scriptId: e.target.value ? e.target.value : null })
+            }
+          >
+            <option value="">None</option>
+            {scripts.map((s) => (
+              <option key={s.id} value={s.id}>
+                {s.name}
+              </option>
+            ))}
+          </select>
+        </Field>
+
         <div>
-          <Label className="mb-2 block">Transform</Label>
+          <Label className="mb-2 block">
+            Transform {entity.parentId ? '(local)' : '(world)'}
+          </Label>
           <div className="grid grid-cols-2 gap-2">
             <Field label="X">
               <NumInput

@@ -1,14 +1,25 @@
 import { Button } from '@/components/ui/button'
+import { flattenHierarchy } from '@/lib/transforms'
 import { cn } from '@/lib/utils'
 import type { Entity } from '@/types/scene'
-import { Camera, Circle, Eye, EyeOff, Lock, Square, Unlock } from 'lucide-react'
+import {
+  Camera,
+  Circle,
+  CornerDownRight,
+  Eye,
+  EyeOff,
+  Lock,
+  Square,
+  Unlock,
+} from 'lucide-react'
 
 interface HierarchyProps {
   entities: Entity[]
-  selectedId: string | null
-  onSelect: (id: string) => void
+  selectedIds: string[]
+  onSelect: (id: string, opts?: { additive?: boolean; range?: boolean }) => void
   onToggleVisible: (id: string) => void
   onToggleLocked: (id: string) => void
+  onReparent: (childId: string, parentId: string | null) => void
 }
 
 function kindIcon(kind: Entity['kind']) {
@@ -24,51 +35,88 @@ function kindIcon(kind: Entity['kind']) {
 
 export function Hierarchy({
   entities,
-  selectedId,
+  selectedIds,
   onSelect,
   onToggleVisible,
   onToggleLocked,
+  onReparent,
 }: HierarchyProps) {
-  const roots = entities.filter((e) => !e.parentId)
+  const rows = flattenHierarchy(entities)
+  const primary = selectedIds[selectedIds.length - 1] ?? null
 
   return (
-    <aside className="panel-animate flex h-full min-h-0 w-56 shrink-0 flex-col border-r border-[var(--border)] bg-[var(--bg-panel)]">
+    <aside className="panel-animate flex h-full min-h-0 w-60 shrink-0 flex-col border-r border-[var(--border)] bg-[var(--bg-panel)]">
       <div className="flex h-8 items-center border-b border-[var(--border)] px-3">
         <h2 className="text-[11px] font-semibold uppercase tracking-wider text-[var(--text-muted)]">
           Hierarchy
         </h2>
         <span className="ml-auto font-mono text-[10px] text-[var(--text-muted)]">
           {entities.length}
+          {selectedIds.length > 1 ? ` · ${selectedIds.length} sel` : ''}
         </span>
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto p-1.5">
-        {roots.length === 0 ? (
+        {rows.length === 0 ? (
           <p className="px-2 py-6 text-center text-xs text-[var(--text-muted)]">
             No entities yet. Add a sprite from the toolbar.
           </p>
         ) : (
-          roots.map((entity) => {
+          rows.map(({ entity, depth }) => {
             const Icon = kindIcon(entity.kind)
-            const selected = entity.id === selectedId
+            const selected = selectedIds.includes(entity.id)
             return (
               <div
                 key={entity.id}
                 role="button"
                 tabIndex={0}
                 data-testid={`hierarchy-${entity.id}`}
+                draggable
+                onDragStart={(e) => {
+                  e.dataTransfer.setData('text/strata-entity', entity.id)
+                  e.dataTransfer.effectAllowed = 'move'
+                }}
+                onDragOver={(e) => {
+                  e.preventDefault()
+                  e.dataTransfer.dropEffect = 'move'
+                }}
+                onDrop={(e) => {
+                  e.preventDefault()
+                  const childId = e.dataTransfer.getData('text/strata-entity')
+                  if (childId && childId !== entity.id) {
+                    onReparent(childId, entity.id)
+                  }
+                }}
                 className={cn(
-                  'group flex cursor-pointer items-center gap-1 rounded-md px-1.5 py-1.5 text-xs transition-colors',
+                  'group flex cursor-pointer items-center gap-1 rounded-md py-1.5 pr-1.5 text-xs transition-colors',
                   selected
                     ? 'bg-[var(--select)] text-[var(--text)]'
                     : 'text-[var(--text-muted)] hover:bg-[var(--bg-panel-raised)] hover:text-[var(--text)]',
                 )}
-                onClick={() => onSelect(entity.id)}
+                style={{ paddingLeft: 6 + depth * 12 }}
+                onClick={(e) =>
+                  onSelect(entity.id, {
+                    additive: e.metaKey || e.ctrlKey,
+                    range: e.shiftKey,
+                  })
+                }
                 onKeyDown={(e) => {
-                  if (e.key === 'Enter' || e.key === ' ') onSelect(entity.id)
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    onSelect(entity.id)
+                  }
                 }}
               >
+                {depth > 0 ? (
+                  <CornerDownRight className="h-3 w-3 shrink-0 opacity-40" />
+                ) : (
+                  <span className="w-3" />
+                )}
                 <Icon className="h-3 w-3 shrink-0 opacity-70" />
                 <span className="min-w-0 flex-1 truncate">{entity.name}</span>
+                {entity.scriptId && (
+                  <span className="rounded bg-[var(--bg-input)] px-1 font-mono text-[9px] text-[var(--accent)]">
+                    .rg
+                  </span>
+                )}
                 <Button
                   variant="ghost"
                   size="icon"
@@ -106,6 +154,23 @@ export function Hierarchy({
           })
         )}
       </div>
+      {primary && (
+        <div className="border-t border-[var(--border)] p-2">
+          <Button
+            variant="ghost"
+            size="sm"
+            className="w-full justify-start"
+            data-testid="unparent"
+            onClick={() => onReparent(primary, null)}
+            disabled={!entities.find((e) => e.id === primary)?.parentId}
+          >
+            Unparent selected
+          </Button>
+          <p className="mt-1 px-1 text-[10px] text-[var(--text-muted)]">
+            Drag onto another row to parent. ⌘/Ctrl click multi-select.
+          </p>
+        </div>
+      )}
     </aside>
   )
 }

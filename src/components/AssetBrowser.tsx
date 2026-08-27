@@ -21,7 +21,7 @@ export function AssetBrowser({
   onSelect,
 }: AssetBrowserProps) {
   return (
-    <section className="panel-animate flex h-40 shrink-0 flex-col border-t border-[var(--border)] bg-[var(--bg-panel)]">
+    <section className="panel-animate flex h-28 shrink-0 flex-col border-t border-[var(--border)] bg-[var(--bg-panel)]">
       <div className="flex h-8 items-center border-b border-[var(--border)] px-3">
         <h2 className="text-[11px] font-semibold uppercase tracking-wider text-[var(--text-muted)]">
           Assets

@@ -1,20 +1,21 @@
 import { useEffect, useRef } from 'react'
+import { entityMap, getWorldPosition } from '@/lib/transforms'
 import type { Entity, ToolMode } from '@/types/scene'
 
 interface ViewportProps {
   entities: Entity[]
-  selectedId: string | null
+  selectedIds: string[]
   tool: ToolMode
   playing: boolean
-  onSelect: (id: string | null) => void
-  onMoveEntity: (id: string, x: number, y: number) => void
+  onSelect: (id: string | null, opts?: { additive?: boolean }) => void
+  onMoveEntity: (id: string, worldX: number, worldY: number) => void
   onMoveBegin?: () => void
   onMoveEnd?: () => void
 }
 
 export function Viewport({
   entities,
-  selectedId,
+  selectedIds,
   tool,
   playing,
   onSelect,
@@ -32,8 +33,8 @@ export function Viewport({
     originCamX: number
     originCamY: number
     entityId: string | null
-    entityOriginX: number
-    entityOriginY: number
+    entityOriginWorldX: number
+    entityOriginWorldY: number
   }>({
     mode: null,
     startX: 0,
@@ -41,16 +42,16 @@ export function Viewport({
     originCamX: 0,
     originCamY: 0,
     entityId: null,
-    entityOriginX: 0,
-    entityOriginY: 0,
+    entityOriginWorldX: 0,
+    entityOriginWorldY: 0,
   })
   const playTimeRef = useRef(0)
   const entitiesRef = useRef(entities)
-  const selectedRef = useRef(selectedId)
+  const selectedRef = useRef(selectedIds)
   const playingRef = useRef(playing)
 
   entitiesRef.current = entities
-  selectedRef.current = selectedId
+  selectedRef.current = selectedIds
   playingRef.current = playing
 
   useEffect(() => {
@@ -83,19 +84,18 @@ export function Viewport({
     }
 
     const hitTest = (wx: number, wy: number) => {
+      const byId = entityMap(entitiesRef.current)
       const list = [...entitiesRef.current].reverse()
       for (const e of list) {
         if (!e.visible) continue
+        const world = getWorldPosition(e, byId)
         const cos = Math.cos((-e.rotation * Math.PI) / 180)
         const sin = Math.sin((-e.rotation * Math.PI) / 180)
-        const dx = wx - e.x
-        const dy = wy - e.y
+        const dx = wx - world.x
+        const dy = wy - world.y
         const lx = dx * cos - dy * sin
         const ly = dx * sin + dy * cos
-        if (
-          Math.abs(lx) <= e.width / 2 &&
-          Math.abs(ly) <= e.height / 2
-        ) {
+        if (Math.abs(lx) <= e.width / 2 && Math.abs(ly) <= e.height / 2) {
           return e
         }
       }
@@ -112,6 +112,7 @@ export function Viewport({
       const h = rect.height
       const cam = cameraRef.current
       const t = playTimeRef.current
+      const byId = entityMap(entitiesRef.current)
 
       ctx.clearRect(0, 0, w, h)
       ctx.fillStyle = '#0e1014'
@@ -122,7 +123,6 @@ export function Viewport({
       ctx.scale(cam.zoom, cam.zoom)
       ctx.translate(-cam.x, -cam.y)
 
-      // grid
       const grid = 32
       const left = cam.x - w / 2 / cam.zoom
       const right = cam.x + w / 2 / cam.zoom
@@ -144,7 +144,6 @@ export function Viewport({
       }
       ctx.stroke()
 
-      // axes
       ctx.strokeStyle = '#3a4150'
       ctx.beginPath()
       ctx.moveTo(left, 0)
@@ -155,9 +154,13 @@ export function Viewport({
 
       for (const e of entitiesRef.current) {
         if (!e.visible) continue
+        const world = getWorldPosition(e, byId)
         ctx.save()
-        const bob = playingRef.current && e.kind === 'sprite' ? Math.sin(t * 3 + e.x * 0.01) * 4 : 0
-        ctx.translate(e.x, e.y + bob)
+        const bob =
+          playingRef.current && e.kind === 'sprite'
+            ? Math.sin(t * 3 + world.x * 0.01) * 4
+            : 0
+        ctx.translate(world.x, world.y + bob)
         ctx.rotate((e.rotation * Math.PI) / 180)
 
         if (e.kind === 'sprite') {
@@ -189,7 +192,7 @@ export function Viewport({
           ctx.stroke()
         }
 
-        if (e.id === selectedRef.current) {
+        if (selectedRef.current.includes(e.id)) {
           ctx.strokeStyle = '#3db8a8'
           ctx.lineWidth = 2 / cam.zoom
           ctx.setLineDash([4 / cam.zoom, 3 / cam.zoom])
@@ -200,19 +203,18 @@ export function Viewport({
             e.height + 8,
           )
           ctx.setLineDash([])
-
-          // move gizmo
           ctx.fillStyle = '#3db8a8'
           ctx.fillRect(-4 / cam.zoom, -4 / cam.zoom, 8 / cam.zoom, 8 / cam.zoom)
         }
 
         ctx.restore()
 
-        // label
         ctx.save()
-        ctx.translate(e.x, e.y + bob - e.height / 2 - 10 / cam.zoom)
+        ctx.translate(world.x, world.y + bob - e.height / 2 - 10 / cam.zoom)
         ctx.scale(1 / cam.zoom, 1 / cam.zoom)
-        ctx.fillStyle = e.id === selectedRef.current ? '#e8eaef' : '#8b93a7'
+        ctx.fillStyle = selectedRef.current.includes(e.id)
+          ? '#e8eaef'
+          : '#8b93a7'
         ctx.font = '500 11px "IBM Plex Sans", sans-serif'
         ctx.textAlign = 'center'
         ctx.fillText(e.name, 0, 0)
@@ -221,11 +223,10 @@ export function Viewport({
 
       ctx.restore()
 
-      // overlay HUD
       ctx.fillStyle = 'rgba(20,22,26,0.72)'
-      ctx.fillRect(10, 10, 168, 44)
+      ctx.fillRect(10, 10, 190, 44)
       ctx.strokeStyle = '#2c313c'
-      ctx.strokeRect(10, 10, 168, 44)
+      ctx.strokeRect(10, 10, 190, 44)
       ctx.fillStyle = '#8b93a7'
       ctx.font = '500 11px "IBM Plex Mono", monospace'
       ctx.fillText(
@@ -233,11 +234,7 @@ export function Viewport({
         18,
         28,
       )
-      ctx.fillText(
-        `cam ${cam.x.toFixed(0)}, ${cam.y.toFixed(0)}`,
-        18,
-        44,
-      )
+      ctx.fillText(`cam ${cam.x.toFixed(0)}, ${cam.y.toFixed(0)}`, 18, 44)
 
       raf = requestAnimationFrame(draw)
     }
@@ -253,10 +250,12 @@ export function Viewport({
       const world = worldFromScreen(e.clientX, e.clientY)
       const hit = hitTest(world.x, world.y)
       const wantsPan = tool === 'move' || e.button === 1 || e.altKey
+      const byId = entityMap(entitiesRef.current)
 
       if (e.button === 0 && hit && tool === 'select') {
-        onSelect(hit.id)
+        onSelect(hit.id, { additive: e.metaKey || e.ctrlKey })
         if (!hit.locked) {
+          const wpos = getWorldPosition(hit, byId)
           dragRef.current = {
             mode: 'entity',
             startX: e.clientX,
@@ -264,8 +263,8 @@ export function Viewport({
             originCamX: cameraRef.current.x,
             originCamY: cameraRef.current.y,
             entityId: hit.id,
-            entityOriginX: hit.x,
-            entityOriginY: hit.y,
+            entityOriginWorldX: wpos.x,
+            entityOriginWorldY: wpos.y,
           }
           onMoveBegin?.()
         }
@@ -286,8 +285,8 @@ export function Viewport({
           originCamX: cameraRef.current.x,
           originCamY: cameraRef.current.y,
           entityId: null,
-          entityOriginX: 0,
-          entityOriginY: 0,
+          entityOriginWorldX: 0,
+          entityOriginWorldY: 0,
         }
         canvas.setPointerCapture(e.pointerId)
       }
@@ -306,8 +305,8 @@ export function Viewport({
       } else if (drag.mode === 'entity' && drag.entityId) {
         onMoveEntity(
           drag.entityId,
-          Math.round(drag.entityOriginX + dx),
-          Math.round(drag.entityOriginY + dy),
+          Math.round(drag.entityOriginWorldX + dx),
+          Math.round(drag.entityOriginWorldY + dy),
         )
       }
     }
@@ -342,13 +341,14 @@ export function Viewport({
   }, [tool, onSelect, onMoveEntity, onMoveBegin, onMoveEnd])
 
   return (
-    <div ref={wrapRef} className="relative min-h-0 min-w-0 flex-1 bg-[var(--viewport)]">
+    <div
+      ref={wrapRef}
+      className="relative min-h-0 min-w-0 flex-1 bg-[var(--viewport)]"
+    >
       <canvas
         ref={canvasRef}
         className="block h-full w-full touch-none"
-        style={{
-          cursor: tool === 'move' ? 'grab' : 'default',
-        }}
+        style={{ cursor: tool === 'move' ? 'grab' : 'default' }}
       />
     </div>
   )
