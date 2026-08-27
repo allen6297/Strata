@@ -296,6 +296,8 @@ export function AssetExplorer({
                 <button
                   key={`dir:${entry.name}`}
                   type="button"
+                  aria-label={`Open folder ${entry.name}`}
+                  data-testid={`asset-folder-${entry.name}`}
                   onClick={() => {
                     setFocusIndex(index)
                     setCwd(cwd ? `${cwd}/${entry.name}` : entry.name)
@@ -338,6 +340,8 @@ export function AssetExplorer({
                 <button
                   key={`dir:${entry.name}`}
                   type="button"
+                  aria-label={`Open folder ${entry.name}`}
+                  data-testid={`asset-folder-${entry.name}`}
                   onClick={() => {
                     setFocusIndex(index)
                     setCwd(cwd ? `${cwd}/${entry.name}` : entry.name)

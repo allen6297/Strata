@@ -18,9 +18,9 @@ async function main() {
 
   // Navigate into textures folder (built-in relative paths)
   await page.getByTestId('asset-filter-all').click()
-  const texturesFolder = page.getByRole('button', { name: /^textures$/i })
+  const texturesFolder = page.getByTestId('asset-folder-textures')
   if (await texturesFolder.count()) {
-    await texturesFolder.first().click()
+    await texturesFolder.click()
     await page.waitForTimeout(100)
   }
 
