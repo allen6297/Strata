@@ -13,13 +13,27 @@ npm run dev
 
 Open the URL Vite prints (default [http://127.0.0.1:4521](http://127.0.0.1:4521)).
 
+## Shortcuts
+
+| Key | Action |
+|-----|--------|
+| `V` | Select tool |
+| `H` | Pan tool |
+| `Delete` / `Backspace` | Delete selection |
+| `Ctrl/Cmd+D` | Duplicate |
+| `Ctrl/Cmd+Z` | Undo |
+| `Ctrl/Cmd+Shift+Z` / `Ctrl+Y` | Redo |
+| `Ctrl/Cmd+S` | Save scene (downloads `.scene` + localStorage) |
+| `Space` | Play / Stop |
+
 ## What you can do
 
 - **Hierarchy** — select entities, toggle visibility/lock
 - **Viewport** — pan (hand tool / Alt / middle mouse), zoom (scroll), drag sprites to move
 - **Inspector** — edit name, transform, color, visibility, lock
-- **Toolbar** — add Sprite / Empty / Camera, delete selection, Play/Stop preview bob
+- **Toolbar** — add Sprite / Empty / Camera, duplicate, delete, undo/redo, open/save, Play
 - **Assets** — browse mock project textures, scripts, audio, and scenes
+- **Scenes** — save/load JSON `.scene` files; autosaved copy in `localStorage`
 
 ## Scripts
 

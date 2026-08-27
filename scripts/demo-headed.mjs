@@ -29,7 +29,7 @@ async function main() {
   await page.waitForTimeout(800)
 
   await page.screenshot({
-    path: '/opt/cursor/artifacts/forge_editor_demo_final.png',
+    path: '/opt/cursor/artifacts/strata_editor_demo_final.png',
   })
 
   await browser.close()

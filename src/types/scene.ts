@@ -23,3 +23,11 @@ export interface AssetItem {
 }
 
 export type ToolMode = 'select' | 'move' | 'create'
+
+export interface SceneDocument {
+  version: 1
+  name: string
+  entities: Entity[]
+}
+
+export const SCENE_STORAGE_KEY = 'strata.scene.v1'

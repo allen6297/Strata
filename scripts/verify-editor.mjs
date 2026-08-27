@@ -5,50 +5,36 @@ async function main() {
   const page = await browser.newPage({ viewport: { width: 1400, height: 900 } })
   await page.goto('http://127.0.0.1:4521/', { waitUntil: 'networkidle' })
 
-  await page.getByText('Coin', { exact: true }).click()
-  await page.waitForTimeout(200)
-  const inspectorTitle = await page.locator('aside').filter({ hasText: 'Inspector' }).innerText()
-  if (!inspectorTitle.includes('sprite') && !inspectorTitle.toLowerCase().includes('coin')) {
-    // name field should show Coin
-  }
-  const nameVal = await page.locator('aside input').first().inputValue()
-  console.log('selected name:', nameVal)
-
-  await page.getByTestId('inspector-x').fill('20')
-  await page.getByTestId('inspector-y').fill('-60')
-  await page.waitForTimeout(100)
-  console.log('x:', await page.getByTestId('inspector-x').inputValue())
-  console.log('y:', await page.getByTestId('inspector-y').inputValue())
-
-  const beforeCount = await page.locator('[data-testid^="hierarchy-"]').count()
+  const before = await page.locator('[data-testid^="hierarchy-"]').count()
   await page.getByTestId('add-sprite').click()
-  await page.waitForTimeout(150)
-  const afterCount = await page.locator('[data-testid^="hierarchy-"]').count()
-  console.log('hierarchy count', beforeCount, '->', afterCount)
+  await page.waitForTimeout(100)
+  const afterAdd = await page.locator('[data-testid^="hierarchy-"]').count()
 
-  await page.getByTestId('play-toggle').click()
-  await page.waitForTimeout(300)
-  const playText = await page.getByTestId('play-toggle').innerText()
-  console.log('play button:', playText)
+  await page.getByTestId('undo').click()
+  await page.waitForTimeout(100)
+  const afterUndo = await page.locator('[data-testid^="hierarchy-"]').count()
 
-  await page.getByTestId('asset-a2').click()
-  const assetSelected = await page.getByTestId('asset-a2').evaluate((el) =>
-    el.className.includes('border-[var(--accent-dim)]') ||
-    getComputedStyle(el).borderColor.length > 0,
-  )
-  console.log('asset clicked, selected class present:', assetSelected)
+  await page.getByTestId('redo').click()
+  await page.waitForTimeout(100)
+  const afterRedo = await page.locator('[data-testid^="hierarchy-"]').count()
+
+  const downloadPromise = page.waitForEvent('download')
+  await page.getByTestId('save-scene').click()
+  const download = await downloadPromise
+  const filename = download.suggestedFilename()
 
   await page.screenshot({
-    path: '/opt/cursor/artifacts/forge_editor_after_interactions.png',
+    path: '/opt/cursor/artifacts/strata_editor_started.png',
     fullPage: true,
   })
 
   const ok =
-    nameVal === 'Coin' &&
-    afterCount === beforeCount + 1 &&
-    playText.toLowerCase().includes('stop')
+    afterAdd === before + 1 &&
+    afterUndo === before &&
+    afterRedo === before + 1 &&
+    filename.includes('.scene')
 
-  console.log(ok ? 'PASS' : 'FAIL')
+  console.log({ before, afterAdd, afterUndo, afterRedo, filename, ok })
   await browser.close()
   process.exit(ok ? 0 : 1)
 }

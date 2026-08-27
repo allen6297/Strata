@@ -8,6 +8,8 @@ interface ViewportProps {
   playing: boolean
   onSelect: (id: string | null) => void
   onMoveEntity: (id: string, x: number, y: number) => void
+  onMoveBegin?: () => void
+  onMoveEnd?: () => void
 }
 
 export function Viewport({
@@ -17,6 +19,8 @@ export function Viewport({
   playing,
   onSelect,
   onMoveEntity,
+  onMoveBegin,
+  onMoveEnd,
 }: ViewportProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const wrapRef = useRef<HTMLDivElement>(null)
@@ -263,6 +267,7 @@ export function Viewport({
             entityOriginX: hit.x,
             entityOriginY: hit.y,
           }
+          onMoveBegin?.()
         }
         canvas.setPointerCapture(e.pointerId)
         return
@@ -308,6 +313,9 @@ export function Viewport({
     }
 
     const onPointerUp = () => {
+      if (dragRef.current.mode === 'entity') {
+        onMoveEnd?.()
+      }
       dragRef.current.mode = null
       dragRef.current.entityId = null
     }
@@ -331,7 +339,7 @@ export function Viewport({
       canvas.removeEventListener('pointerup', onPointerUp)
       canvas.removeEventListener('pointercancel', onPointerUp)
     }
-  }, [tool, onSelect, onMoveEntity])
+  }, [tool, onSelect, onMoveEntity, onMoveBegin, onMoveEnd])
 
   return (
     <div ref={wrapRef} className="relative min-h-0 min-w-0 flex-1 bg-[var(--viewport)]">
