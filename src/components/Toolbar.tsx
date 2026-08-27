@@ -1,4 +1,5 @@
 import { Button } from '@/components/ui/button'
+import { isTauri } from '@/lib/tauri'
 import type { ToolMode } from '@/types/scene'
 import {
   Box,
@@ -72,7 +73,7 @@ export function Toolbar({
         <div className="leading-tight">
           <div className="text-sm font-semibold tracking-tight">Strata</div>
           <div className="font-mono text-[10px] text-[var(--text-muted)]">
-            Scene Editor
+            {isTauri() ? 'Desktop' : 'Scene Editor'}
           </div>
         </div>
       </div>
