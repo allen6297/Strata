@@ -28,17 +28,20 @@ function NumInput({
   onChange,
   step = 1,
   disabled,
+  'data-testid': testId,
 }: {
   value: number
   onChange: (n: number) => void
   step?: number
   disabled?: boolean
+  'data-testid'?: string
 }) {
   return (
     <Input
       type="number"
       step={step}
       disabled={disabled}
+      data-testid={testId}
       value={Number.isFinite(value) ? value : 0}
       onChange={(e) => onChange(Number(e.target.value))}
       className="font-mono"
@@ -92,6 +95,7 @@ export function Inspector({ entity, onChange }: InspectorProps) {
               <NumInput
                 value={entity.x}
                 disabled={disabled}
+                data-testid="inspector-x"
                 onChange={(x) => patch({ x })}
               />
             </Field>
@@ -99,6 +103,7 @@ export function Inspector({ entity, onChange }: InspectorProps) {
               <NumInput
                 value={entity.y}
                 disabled={disabled}
+                data-testid="inspector-y"
                 onChange={(y) => patch({ y })}
               />
             </Field>

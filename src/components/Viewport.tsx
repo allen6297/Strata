@@ -248,8 +248,7 @@ export function Viewport({
     const onPointerDown = (e: PointerEvent) => {
       const world = worldFromScreen(e.clientX, e.clientY)
       const hit = hitTest(world.x, world.y)
-      const pan =
-        tool === 'move' || e.button === 1 || e.altKey || (e.button === 0 && !hit)
+      const wantsPan = tool === 'move' || e.button === 1 || e.altKey
 
       if (e.button === 0 && hit && tool === 'select') {
         onSelect(hit.id)
@@ -269,8 +268,12 @@ export function Viewport({
         return
       }
 
-      if (pan) {
-        if (e.button === 0 && !hit) onSelect(null)
+      if (e.button === 0 && !hit && tool === 'select' && !e.altKey) {
+        onSelect(null)
+        return
+      }
+
+      if (wantsPan) {
         dragRef.current = {
           mode: 'pan',
           startX: e.clientX,

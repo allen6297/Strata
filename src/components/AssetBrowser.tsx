@@ -38,6 +38,7 @@ export function AssetBrowser({
             <button
               key={asset.id}
               type="button"
+              data-testid={`asset-${asset.id}`}
               onClick={() => onSelect(asset.id)}
               className={cn(
                 'flex w-28 shrink-0 flex-col rounded-md border px-2 py-2 text-left transition-colors',

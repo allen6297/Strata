@@ -53,13 +53,19 @@ export function Hierarchy({
             return (
               <div
                 key={entity.id}
+                role="button"
+                tabIndex={0}
+                data-testid={`hierarchy-${entity.id}`}
                 className={cn(
-                  'group flex cursor-pointer items-center gap-1 rounded-md px-1.5 py-1 text-xs transition-colors',
+                  'group flex cursor-pointer items-center gap-1 rounded-md px-1.5 py-1.5 text-xs transition-colors',
                   selected
                     ? 'bg-[var(--select)] text-[var(--text)]'
                     : 'text-[var(--text-muted)] hover:bg-[var(--bg-panel-raised)] hover:text-[var(--text)]',
                 )}
                 onClick={() => onSelect(entity.id)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') onSelect(entity.id)
+                }}
               >
                 <Icon className="h-3 w-3 shrink-0 opacity-70" />
                 <span className="min-w-0 flex-1 truncate">{entity.name}</span>

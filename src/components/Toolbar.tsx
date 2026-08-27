@@ -74,17 +74,35 @@ export function Toolbar({
       <div className="mx-1 h-5 w-px bg-[var(--border)]" />
 
       <div className="flex items-center gap-1">
-        <Button variant="ghost" size="sm" onClick={onAddSprite} title="Add Sprite">
+        <Button
+          variant="ghost"
+          size="sm"
+          data-testid="add-sprite"
+          onClick={onAddSprite}
+          title="Add Sprite"
+        >
           <Plus className="h-3.5 w-3.5" />
           <Square className="h-3 w-3" />
           Sprite
         </Button>
-        <Button variant="ghost" size="sm" onClick={onAddEmpty} title="Add Empty">
+        <Button
+          variant="ghost"
+          size="sm"
+          data-testid="add-empty"
+          onClick={onAddEmpty}
+          title="Add Empty"
+        >
           <Plus className="h-3.5 w-3.5" />
           <Circle className="h-3 w-3" />
           Empty
         </Button>
-        <Button variant="ghost" size="sm" onClick={onAddCamera} title="Add Camera">
+        <Button
+          variant="ghost"
+          size="sm"
+          data-testid="add-camera"
+          onClick={onAddCamera}
+          title="Add Camera"
+        >
           <Plus className="h-3.5 w-3.5" />
           <Camera className="h-3 w-3" />
           Camera
@@ -107,6 +125,7 @@ export function Toolbar({
         <Button
           variant={playing ? 'accent' : 'default'}
           size="sm"
+          data-testid="play-toggle"
           className={playing ? 'playing-indicator' : ''}
           onClick={onPlayToggle}
         >
