@@ -18,6 +18,7 @@ struct RunResult {
 struct ProjectFile {
   name: String,
   path: String,
+  relative_path: String,
   kind: String,
   size: u64,
   content: Option<String>,
@@ -138,6 +139,74 @@ fn classify(name: &str) -> Option<&'static str> {
   }
 }
 
+fn should_skip_dir(name: &str) -> bool {
+  matches!(
+    name,
+    ".git"
+      | "node_modules"
+      | "target"
+      | "dist"
+      | ".venv"
+      | "venv"
+      | "__pycache__"
+      | ".strata"
+  ) || name.starts_with('.')
+}
+
+fn walk_project(
+  root: &Path,
+  dir: &Path,
+  depth: u32,
+  out: &mut Vec<ProjectFile>,
+) -> Result<(), String> {
+  if depth > 6 {
+    return Ok(());
+  }
+  let entries = fs::read_dir(dir).map_err(|e| e.to_string())?;
+  for entry in entries {
+    let entry = entry.map_err(|e| e.to_string())?;
+    let name = entry.file_name().to_string_lossy().to_string();
+    let full = entry.path();
+    let meta = entry.metadata().map_err(|e| e.to_string())?;
+    if meta.is_dir() {
+      if should_skip_dir(&name) {
+        continue;
+      }
+      walk_project(root, &full, depth + 1, out)?;
+      continue;
+    }
+    if !meta.is_file() {
+      continue;
+    }
+    let Some(kind) = classify(&name) else {
+      continue;
+    };
+    let relative = full
+      .strip_prefix(root)
+      .unwrap_or(&full)
+      .to_string_lossy()
+      .replace('\\', "/");
+    let content = if kind == "script" || kind == "scene" {
+      match fs::read_to_string(&full) {
+        Ok(text) if text.len() <= 512_000 => Some(text),
+        Ok(_) => Some("// [file too large to preload]".into()),
+        Err(_) => None,
+      }
+    } else {
+      None
+    };
+    out.push(ProjectFile {
+      name,
+      path: full.to_string_lossy().to_string(),
+      relative_path: relative,
+      kind: kind.into(),
+      size: meta.len(),
+      content,
+    });
+  }
+  Ok(())
+}
+
 #[tauri::command]
 fn list_project_files(path: String) -> Result<Vec<ProjectFile>, String> {
   let root = PathBuf::from(&path);
@@ -145,31 +214,12 @@ fn list_project_files(path: String) -> Result<Vec<ProjectFile>, String> {
     return Err("Not a directory".into());
   }
   let mut out = Vec::new();
-  for entry in fs::read_dir(&root).map_err(|e| e.to_string())? {
-    let entry = entry.map_err(|e| e.to_string())?;
-    let meta = entry.metadata().map_err(|e| e.to_string())?;
-    if !meta.is_file() {
-      continue;
-    }
-    let name = entry.file_name().to_string_lossy().to_string();
-    let Some(kind) = classify(&name) else {
-      continue;
-    };
-    let full = entry.path();
-    let content = if kind == "script" || kind == "scene" {
-      Some(fs::read_to_string(&full).unwrap_or_default())
-    } else {
-      None
-    };
-    out.push(ProjectFile {
-      name,
-      path: full.to_string_lossy().to_string(),
-      kind: kind.into(),
-      size: meta.len(),
-      content,
-    });
-  }
-  out.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+  walk_project(&root, &root, 0, &mut out)?;
+  out.sort_by(|a, b| {
+    a.relative_path
+      .to_lowercase()
+      .cmp(&b.relative_path.to_lowercase())
+  });
   Ok(out)
 }
 

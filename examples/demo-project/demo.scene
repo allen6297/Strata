@@ -23,7 +23,7 @@
       "name": "Coin",
       "kind": "sprite",
       "parentId": "ent_hero",
-      "scriptId": null,
+      "scriptId": "file:CoinSpin.rg",
       "textureId": "file:coin.png",
       "x": 48,
       "y": -40,

@@ -46,9 +46,10 @@ Assign a texture in the Inspector, or **double-click** a texture asset. Sample i
 
 ## Project folders
 
-- **Open Project** — pick a directory; loads `.rg`, `.scene`, textures, audio
-- **Save Project** — writes `*.scene` + scripts back into that folder
-- Sample: `examples/demo-project/`
+- **Open Project** — recursive scan for `.rg`, `.scene`, textures, audio (skips `.git` / `node_modules` / etc.)
+- **Asset explorer** — folders, search, type filters, grid/list, refresh, keyboard nav
+- **Save Project** — writes scene + scripts (including nested `scripts/` paths)
+- Sample: `examples/demo-project/` (`textures/`, `scripts/`, `demo.scene`)
 
 ## Editing
 

@@ -21,6 +21,10 @@ interface FileSystemDirectoryHandle extends FileSystemHandle {
     name: string,
     options?: { create?: boolean },
   ): Promise<FileSystemFileHandle>
+  getDirectoryHandle(
+    name: string,
+    options?: { create?: boolean },
+  ): Promise<FileSystemDirectoryHandle>
 }
 
 interface Window {

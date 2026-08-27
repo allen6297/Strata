@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { AssetBrowser } from '@/components/AssetBrowser'
+import { AssetExplorer } from '@/components/AssetExplorer'
 import { Hierarchy } from '@/components/Hierarchy'
 import { Inspector } from '@/components/Inspector'
 import { ScriptPanel } from '@/components/ScriptPanel'
@@ -85,6 +85,8 @@ export default function App() {
   const [projectPath, setProjectPath] = useState<string | null>(null)
   const [diskAssets, setDiskAssets] = useState<AssetItem[]>([])
   const [scripts, setScripts] = useState<AssetItem[]>(bootScripts)
+  const [assetsLoading, setAssetsLoading] = useState(false)
+  const [assetsError, setAssetsError] = useState<string | null>(null)
   const [selectedAssetId, setSelectedAssetId] = useState<string | null>(
     'scr_player',
   )
@@ -404,51 +406,80 @@ export default function App() {
     }
   }, [playing, applyTransient])
 
+  const loadProjectFromPath = useCallback(
+    async (path: string) => {
+      setAssetsLoading(true)
+      setAssetsError(null)
+      try {
+        const files = await listProjectFiles(path)
+        const mapped = await projectFilesToAssets(files)
+        setProjectPath(path)
+        if (mapped.scripts.length) persistScripts(mapped.scripts)
+        else persistScripts([])
+        setDiskAssets(mapped.assets)
+        if (mapped.errors.length) {
+          setAssetsError(mapped.errors.slice(0, 3).join(' · '))
+        }
+        if (mapped.sceneText) {
+          try {
+            const doc = parseSceneDocument(JSON.parse(mapped.sceneText))
+            const byName = new Map(mapped.scripts.map((s) => [s.name, s.id]))
+            const texByName = new Map(
+              mapped.assets
+                .filter((a) => a.type === 'texture')
+                .map((t) => [t.name, t.id]),
+            )
+            const nextEntities = doc.entities.map((e) => {
+              let next = { ...e }
+              if (e.scriptId) {
+                const bare = e.scriptId.replace(/^file:(?:.*[\\/])?/, '')
+                const matched = byName.get(bare) ?? byName.get(e.scriptId)
+                if (matched) next = { ...next, scriptId: matched }
+              }
+              if (e.textureId) {
+                const bare = e.textureId.replace(/^file:(?:.*[\\/])?/, '')
+                const matched =
+                  texByName.get(bare) ?? texByName.get(e.textureId)
+                if (matched) next = { ...next, textureId: matched }
+              }
+              return next
+            })
+            replace(nextEntities)
+            setSceneName(doc.name)
+            setSelectedIds(nextEntities[0]?.id ? [nextEntities[0].id] : [])
+          } catch {
+            // keep current scene if parse fails
+          }
+        }
+        flashStatus(`Loaded ${files.length} file(s)`)
+        setDirty(false)
+      } catch (err) {
+        setAssetsError(err instanceof Error ? err.message : 'Scan failed')
+        flashStatus(err instanceof Error ? err.message : 'Open project failed')
+      } finally {
+        setAssetsLoading(false)
+      }
+    },
+    [flashStatus, persistScripts, replace],
+  )
+
   const openProject = useCallback(async () => {
     try {
       const path = await pickProjectDirectory()
       if (!path) return
-      const files = await listProjectFiles(path)
-      const mapped = await projectFilesToAssets(files)
-      setProjectPath(path)
-      if (mapped.scripts.length) persistScripts(mapped.scripts)
-      setDiskAssets(mapped.assets)
-      if (mapped.sceneText) {
-        try {
-          const doc = parseSceneDocument(JSON.parse(mapped.sceneText))
-          const byName = new Map(mapped.scripts.map((s) => [s.name, s.id]))
-          const texByName = new Map(
-            mapped.assets
-              .filter((a) => a.type === 'texture')
-              .map((t) => [t.name, t.id]),
-          )
-          const entities = doc.entities.map((e) => {
-            let next = { ...e }
-            if (e.scriptId) {
-              const bare = e.scriptId.replace(/^file:(?:.*[\\/])?/, '')
-              const matched = byName.get(bare) ?? byName.get(e.scriptId)
-              if (matched) next = { ...next, scriptId: matched }
-            }
-            if (e.textureId) {
-              const bare = e.textureId.replace(/^file:(?:.*[\\/])?/, '')
-              const matched = texByName.get(bare) ?? texByName.get(e.textureId)
-              if (matched) next = { ...next, textureId: matched }
-            }
-            return next
-          })
-          replace(entities)
-          setSceneName(doc.name)
-          setSelectedIds(entities[0]?.id ? [entities[0].id] : [])
-        } catch {
-          // keep current scene if parse fails
-        }
-      }
-      flashStatus(`Opened ${files.length} project file(s)`)
-      setDirty(false)
+      await loadProjectFromPath(path)
     } catch (err) {
       flashStatus(err instanceof Error ? err.message : 'Open project failed')
     }
-  }, [flashStatus, persistScripts, replace])
+  }, [flashStatus, loadProjectFromPath])
+
+  const refreshProject = useCallback(async () => {
+    if (!projectPath) {
+      flashStatus('No project folder open')
+      return
+    }
+    await loadProjectFromPath(projectPath)
+  }, [flashStatus, loadProjectFromPath, projectPath])
 
   const saveProject = useCallback(async () => {
     if (!projectPath) {
@@ -465,8 +496,9 @@ export default function App() {
         JSON.stringify(doc, null, 2),
       )
       for (const script of scripts) {
+        const rel = script.relativePath ?? `scripts/${script.name}`
         await writeProjectFile(
-          joinProjectPath(projectPath, script.name),
+          joinProjectPath(projectPath, rel),
           script.content ?? '',
         )
       }
@@ -488,6 +520,7 @@ export default function App() {
       language: 'rosegold',
       content: `fn main(): Int {\n    print("hello from Strata");\n    return 0;\n}\n`,
       size: '64 B',
+      relativePath: `scripts/Script${scripts.length + 1}.rg`,
     }
     next.size = `${next.content!.length} B`
     persistScripts([...scripts, next])
@@ -635,17 +668,32 @@ export default function App() {
             onMoveBegin={beginTransient}
             onMoveEnd={endTransient}
           />
-          <AssetBrowser
+          <AssetExplorer
             assets={assets}
             selectedId={selectedAssetId}
+            projectLabel={projectLabel}
+            loading={assetsLoading}
+            error={assetsError}
             onSelect={setSelectedAssetId}
+            onRefresh={() => void refreshProject()}
+            onOpenProject={() => void openProject()}
             onActivate={(asset) => {
               if (asset.type === 'texture' && primaryId) {
                 updateEntity(primaryId, { textureId: asset.id })
                 flashStatus(`Texture → ${asset.name}`)
               } else if (asset.type === 'script' && primaryId) {
                 updateEntity(primaryId, { scriptId: asset.id })
+                setSelectedAssetId(asset.id)
                 flashStatus(`Script → ${asset.name}`)
+              } else if (asset.type === 'scene' && asset.content) {
+                try {
+                  const doc = parseSceneDocument(JSON.parse(asset.content))
+                  replace(doc.entities)
+                  setSceneName(doc.name)
+                  flashStatus(`Opened ${asset.name}`)
+                } catch {
+                  flashStatus(`Could not open ${asset.name}`)
+                }
               }
             }}
           />

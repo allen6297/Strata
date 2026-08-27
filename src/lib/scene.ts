@@ -17,21 +17,36 @@ export const STATIC_ASSETS: AssetItem[] = [
     type: 'texture',
     size: '64×64',
     url: '/textures/player.png',
+    relativePath: 'textures/player.png',
   },
   {
     id: 'a2',
     name: 'tileset.png',
     type: 'texture',
     size: '256×256',
+    relativePath: 'textures/tileset.png',
   },
-  { id: 'a4', name: 'jump.wav', type: 'audio', size: '48 KB' },
-  { id: 'a5', name: 'main.scene', type: 'scene', size: '1.4 KB' },
+  {
+    id: 'a4',
+    name: 'jump.wav',
+    type: 'audio',
+    size: '48 KB',
+    relativePath: 'audio/jump.wav',
+  },
+  {
+    id: 'a5',
+    name: 'main.scene',
+    type: 'scene',
+    size: '1.4 KB',
+    relativePath: 'main.scene',
+  },
   {
     id: 'a6',
     name: 'coin.png',
     type: 'texture',
     size: '32×32',
     url: '/textures/coin.png',
+    relativePath: 'textures/coin.png',
   },
 ]
 
@@ -44,6 +59,7 @@ export function createDefaultScripts(): AssetItem[] {
       language: 'rosegold',
       size: `${DEFAULT_PLAYER_SCRIPT.length} B`,
       content: DEFAULT_PLAYER_SCRIPT,
+      relativePath: 'scripts/PlayerController.rg',
     },
     {
       id: 'scr_coin',
@@ -52,6 +68,7 @@ export function createDefaultScripts(): AssetItem[] {
       language: 'rosegold',
       size: `${DEFAULT_COIN_SCRIPT.length} B`,
       content: DEFAULT_COIN_SCRIPT,
+      relativePath: 'scripts/CoinSpin.rg',
     },
   ]
 }
