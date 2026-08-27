@@ -2,7 +2,7 @@
 
 A lightweight **2D game engine editor** UI: hierarchy, canvas viewport, inspector, and asset browser.
 
-Intended local path: `/Users/kalob/Code/Strata`. Built with Vite, React, TypeScript, and Tailwind. Designed as a desktop-style editor shell you can later wrap with Tauri.
+Intended local path: `/Users/kalob/Code/strata`. Built with Vite, React, TypeScript, and Tailwind. Designed as a desktop-style editor shell you can later wrap with Tauri.
 
 ## Run locally
 
