@@ -28,15 +28,44 @@ npm run tauri:build
 
 ## Live Play
 
-On **Play**, Strata runs `on_ready` once, then ticks `on_update` while playing.
+On **Play**, Strata runs `on_ready` once, then ticks `on_update` while playing. The viewport follows **Main Camera**, hides editor gizmos, and restores your edit camera when you stop.
 
-Scripts can move entities by printing directives:
+### Input (browser preview + desktop)
+
+Add a fifth `keys` parameter to `on_update` to read held keys (comma-separated codes):
+
+```rg
+fn on_update(name: Str, x: Float, y: Float, dt: Float, keys: Str): Int {
+    if keys.contains("ArrowRight") { print("strata:move dx=3 dy=0"); }
+    return 0;
+}
+```
+
+Arrow keys, WASD, and Space are tracked during play.
+
+### Strata directives
+
+Scripts move entities and trigger runtime effects by printing directives:
 
 ```rg
 print("strata:move dx=1.5 dy=0");
 print("strata:rot 8");
 print("strata:set x=0 y=10 rot=0");
+print("strata:play_sound name=jump.wav");
+print("strata:spawn name=Bullet kind=sprite x=120 y=0 w=8 h=8 color=#e5c07b");
+print("strata:destroy");
+print("strata:get");
 ```
+
+| Directive | Effect |
+|-----------|--------|
+| `strata:move` | Nudge entity by `dx` / `dy` |
+| `strata:rot` | Add rotation degrees |
+| `strata:set` | Set `x`, `y`, `rot` |
+| `strata:play_sound` | Play audio asset (`name=` or `id=`) |
+| `strata:spawn` | Create entity (`name`, `kind`, `x`, `y`, `w`, `h`, `color`, optional `texture` / `script`) |
+| `strata:destroy` | Remove entity (or `name=Other`) |
+| `strata:get` | Log entity state to the play log |
 
 Desktop uses real `rosegold`; the browser applies the same directives from script source as a preview.
 

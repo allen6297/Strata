@@ -7,6 +7,7 @@ export interface Entity {
   parentId: string | null
   scriptId: string | null
   textureId: string | null
+  audioId: string | null
   x: number
   y: number
   width: number
@@ -25,7 +26,7 @@ export interface AssetItem {
   /** Present for RoseGold / text scripts */
   content?: string
   language?: 'rosegold' | 'text'
-  /** Object URL / Tauri convertFileSrc / public path for textures */
+  /** Object URL / Tauri convertFileSrc / public path for textures & audio */
   url?: string
   /** Absolute filesystem path when loaded from a project folder */
   path?: string

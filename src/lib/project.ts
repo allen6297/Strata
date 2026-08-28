@@ -224,9 +224,20 @@ function mimeForName(name: string): string {
   if (lower.endsWith('.jpg') || lower.endsWith('.jpeg')) return 'image/jpeg'
   if (lower.endsWith('.webp')) return 'image/webp'
   if (lower.endsWith('.gif')) return 'image/gif'
+  if (lower.endsWith('.wav')) return 'audio/wav'
+  if (lower.endsWith('.mp3')) return 'audio/mpeg'
+  if (lower.endsWith('.ogg')) return 'audio/ogg'
   return 'application/octet-stream'
 }
 
+export async function resolveAssetUrl(
+  path: string,
+  name: string,
+): Promise<string | undefined> {
+  return resolveTextureUrl(path, name)
+}
+
+/** @deprecated use resolveAssetUrl */
 export async function resolveTextureUrl(
   path: string,
   name: string,
@@ -318,14 +329,17 @@ export async function projectFilesToAssets(files: ProjectFile[]): Promise<{
           url,
           bytes: f.size,
         })
-      } else if (f.kind === 'audio' || f.kind === 'scene') {
+      } else if (f.kind === 'audio') {
+        const url = await resolveAssetUrl(f.path, f.name)
+        if (!url) errors.push(`Could not load audio ${relativePath}`)
         assets.push({
           id: `file:${f.path}`,
           name: f.name,
-          type: f.kind as AssetItem['type'],
+          type: 'audio',
           size: formatBytes(f.size),
           path: f.path,
           relativePath,
+          url,
           bytes: f.size,
         })
       }

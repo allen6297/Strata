@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react'
+import { findPlayCamera, cameraWorldCenter, zoomForCamera } from '@/lib/runtime-camera'
 import { entityMap, getWorldPosition } from '@/lib/transforms'
 import type { Entity, ToolMode } from '@/types/scene'
 
@@ -59,6 +60,9 @@ export function Viewport({
     entityOriginWorldY: 0,
   })
   const playTimeRef = useRef(0)
+  const savedEditorCamRef = useRef<{ x: number; y: number; zoom: number } | null>(
+    null,
+  )
   const entitiesRef = useRef(entities)
   const selectedRef = useRef(selectedIds)
   const playingRef = useRef(playing)
@@ -84,6 +88,16 @@ export function Viewport({
       imageCacheRef.current.set(id, img)
     }
   }, [textureUrlById])
+
+  useEffect(() => {
+    if (playing) {
+      savedEditorCamRef.current = { ...cameraRef.current }
+    } else if (savedEditorCamRef.current) {
+      cameraRef.current = { ...savedEditorCamRef.current }
+      savedEditorCamRef.current = null
+      playTimeRef.current = 0
+    }
+  }, [playing])
 
   useEffect(() => {
     const canvas = canvasRef.current
@@ -165,6 +179,17 @@ export function Viewport({
       const t = playTimeRef.current
       const byId = entityMap(entitiesRef.current)
       const grid = gridRef.current
+      const inPlay = playingRef.current
+
+      if (inPlay) {
+        const playCam = findPlayCamera(entitiesRef.current)
+        if (playCam) {
+          const center = cameraWorldCenter(entitiesRef.current, playCam)
+          cam.x = center.x
+          cam.y = center.y
+          cam.zoom = zoomForCamera(playCam, w, h)
+        }
+      }
 
       ctx.clearRect(0, 0, w, h)
       ctx.fillStyle = '#0e1014'
@@ -182,7 +207,7 @@ export function Viewport({
       const startX = Math.floor(left / grid) * grid
       const startY = Math.floor(top / grid) * grid
 
-      ctx.strokeStyle = snapRef.current ? '#2a3344' : '#1f2430'
+      ctx.strokeStyle = inPlay ? '#1a1f2a' : snapRef.current ? '#2a3344' : '#1f2430'
       ctx.lineWidth = 1 / cam.zoom
       ctx.beginPath()
       for (let x = startX; x <= right; x += grid) {
@@ -205,6 +230,7 @@ export function Viewport({
 
       for (const e of entitiesRef.current) {
         if (!e.visible) continue
+        if (inPlay && e.kind === 'camera') continue
         const world = getWorldPosition(e, byId)
         ctx.save()
         const bob =
@@ -243,7 +269,7 @@ export function Viewport({
           ctx.stroke()
         }
 
-        if (selectedRef.current.includes(e.id)) {
+        if (selectedRef.current.includes(e.id) && !inPlay) {
           ctx.strokeStyle = '#3db8a8'
           ctx.lineWidth = 2 / cam.zoom
           ctx.setLineDash([4 / cam.zoom, 3 / cam.zoom])
@@ -258,21 +284,23 @@ export function Viewport({
 
         ctx.restore()
 
-        ctx.save()
-        ctx.translate(world.x, world.y + bob - e.height / 2 - 10 / cam.zoom)
-        ctx.scale(1 / cam.zoom, 1 / cam.zoom)
-        ctx.fillStyle = selectedRef.current.includes(e.id)
-          ? '#e8eaef'
-          : '#8b93a7'
-        ctx.font = '500 11px "IBM Plex Sans", sans-serif'
-        ctx.textAlign = 'center'
-        ctx.fillText(e.name, 0, 0)
-        ctx.restore()
+        if (!inPlay) {
+          ctx.save()
+          ctx.translate(world.x, world.y + bob - e.height / 2 - 10 / cam.zoom)
+          ctx.scale(1 / cam.zoom, 1 / cam.zoom)
+          ctx.fillStyle = selectedRef.current.includes(e.id)
+            ? '#e8eaef'
+            : '#8b93a7'
+          ctx.font = '500 11px "IBM Plex Sans", sans-serif'
+          ctx.textAlign = 'center'
+          ctx.fillText(e.name, 0, 0)
+          ctx.restore()
+        }
       }
 
-      // Transform gizmo on primary selection
+      // Transform gizmo on primary selection (edit mode only)
       const primary = primarySelected()
-      if (primary && primary.visible && tool === 'select') {
+      if (primary && primary.visible && tool === 'select' && !inPlay) {
         const world = getWorldPosition(primary, byId)
         const arm = Math.max(28, Math.min(primary.width, primary.height) * 0.75)
         const handle = 5 / cam.zoom
@@ -324,22 +352,28 @@ export function Viewport({
       ctx.restore()
 
       ctx.fillStyle = 'rgba(20,22,26,0.72)'
-      ctx.fillRect(10, 10, 210, 44)
+      ctx.fillRect(10, 10, inPlay ? 250 : 210, inPlay ? 58 : 44)
       ctx.strokeStyle = '#2c313c'
-      ctx.strokeRect(10, 10, 210, 44)
+      ctx.strokeRect(10, 10, inPlay ? 250 : 210, inPlay ? 58 : 44)
       ctx.fillStyle = '#8b93a7'
       ctx.font = '500 11px "IBM Plex Mono", monospace'
       ctx.fillText(
-        `zoom ${(cam.zoom * 100).toFixed(0)}% · ${playingRef.current ? 'PLAY' : 'EDIT'}${snapRef.current ? ' · SNAP' : ''}`,
+        `zoom ${(cam.zoom * 100).toFixed(0)}% · ${inPlay ? 'PLAY' : 'EDIT'}${snapRef.current && !inPlay ? ' · SNAP' : ''}`,
         18,
         28,
       )
-      ctx.fillText(`cam ${cam.x.toFixed(0)}, ${cam.y.toFixed(0)} · grid ${grid}`, 18, 44)
+      if (inPlay) {
+        ctx.fillText('← → move · Space = jump sound', 18, 44)
+        ctx.fillText(`cam ${cam.x.toFixed(0)}, ${cam.y.toFixed(0)}`, 18, 58)
+      } else {
+        ctx.fillText(`cam ${cam.x.toFixed(0)}, ${cam.y.toFixed(0)} · grid ${grid}`, 18, 44)
+      }
 
       raf = requestAnimationFrame(draw)
     }
 
     const onWheel = (e: WheelEvent) => {
+      if (playingRef.current) return
       e.preventDefault()
       const cam = cameraRef.current
       const factor = e.deltaY > 0 ? 0.9 : 1.1
@@ -347,6 +381,7 @@ export function Viewport({
     }
 
     const onPointerDown = (e: PointerEvent) => {
+      if (playingRef.current) return
       const world = worldFromScreen(e.clientX, e.clientY)
       const wantsPan = tool === 'move' || e.button === 1 || e.altKey
       const byId = entityMap(entitiesRef.current)
@@ -478,7 +513,7 @@ export function Viewport({
       canvas.removeEventListener('pointerup', onPointerUp)
       canvas.removeEventListener('pointercancel', onPointerUp)
     }
-  }, [tool, onSelect, onMoveEntity, onMoveBegin, onMoveEnd])
+  }, [tool, playing, onSelect, onMoveEntity, onMoveBegin, onMoveEnd])
 
   return (
     <div

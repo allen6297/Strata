@@ -1,6 +1,9 @@
+import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { playSoundUrl } from '@/lib/audio'
 import type { AssetItem, Entity } from '@/types/scene'
+import { Volume2 } from 'lucide-react'
 import type { ReactNode } from 'react'
 
 interface InspectorProps {
@@ -9,6 +12,8 @@ interface InspectorProps {
   entities: Entity[]
   scripts: AssetItem[]
   textures: AssetItem[]
+  audioClips: AssetItem[]
+  audioUrlById: Record<string, string>
   onChange: (id: string, patch: Partial<Entity>) => void
 }
 
@@ -59,6 +64,8 @@ export function Inspector({
   entities,
   scripts,
   textures,
+  audioClips,
+  audioUrlById,
   onChange,
 }: InspectorProps) {
   if (!entity) {
@@ -141,6 +148,39 @@ export function Inspector({
               </option>
             ))}
           </select>
+        </Field>
+
+        <Field label="Audio">
+          <div className="flex gap-1">
+            <select
+              className="h-7 min-w-0 flex-1 rounded-md border border-[var(--border)] bg-[var(--bg-input)] px-2 text-xs text-[var(--text)] outline-none focus:border-[var(--accent-dim)]"
+              value={entity.audioId ?? ''}
+              data-testid="inspector-audio"
+              onChange={(e) =>
+                patch({ audioId: e.target.value ? e.target.value : null })
+              }
+            >
+              <option value="">None</option>
+              {audioClips.map((a) => (
+                <option key={a.id} value={a.id}>
+                  {a.name}
+                </option>
+              ))}
+            </select>
+            <Button
+              variant="toolbar"
+              size="icon"
+              title="Preview sound"
+              disabled={!entity.audioId || !audioUrlById[entity.audioId]}
+              data-testid="inspector-audio-preview"
+              onClick={() => {
+                const id = entity.audioId
+                if (id && audioUrlById[id]) playSoundUrl(audioUrlById[id])
+              }}
+            >
+              <Volume2 className="h-3.5 w-3.5" />
+            </Button>
+          </div>
         </Field>
 
         <Field label="RoseGold script">

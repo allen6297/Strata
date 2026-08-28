@@ -6,14 +6,18 @@ import { ScriptPanel } from '@/components/ScriptPanel'
 import { Toolbar } from '@/components/Toolbar'
 import { Viewport } from '@/components/Viewport'
 import { useEntityHistory } from '@/hooks/useEntityHistory'
+import { playSoundAsset } from '@/lib/audio'
 import {
   applyDirectives,
   collectReadyJobs,
   collectUpdateJobs,
   parseStrataDirectives,
+  previewReadyDirectives,
   previewUpdateDirectives,
   runRoseGoldHooks,
+  type RuntimeSideEffect,
 } from '@/lib/rosegold'
+import { useRuntimeInput } from '@/lib/runtime-input'
 import {
   joinProjectPath,
   listProjectFiles,
@@ -102,13 +106,23 @@ export default function App() {
   entitiesRefForPlay.current = entities
   scriptsRefForPlay.current = scripts
 
+  const runtimeInput = useRuntimeInput(playing)
+
   const assets = useMemo(
     () => [...scripts, ...(diskAssets.length ? diskAssets : STATIC_ASSETS)],
     [scripts, diskAssets],
   )
 
+  const assetsRefForPlay = useRef(assets)
+  assetsRefForPlay.current = assets
+
   const textures = useMemo(
     () => assets.filter((a) => a.type === 'texture'),
+    [assets],
+  )
+
+  const audioClips = useMemo(
+    () => assets.filter((a) => a.type === 'audio'),
     [assets],
   )
 
@@ -119,6 +133,30 @@ export default function App() {
     }
     return map
   }, [textures])
+
+  const audioUrlById = useMemo(() => {
+    const map: Record<string, string> = {}
+    for (const a of audioClips) {
+      if (a.url) map[a.id] = a.url
+    }
+    return map
+  }, [audioClips])
+
+  const runSideEffects = useCallback((effects: RuntimeSideEffect[]) => {
+    for (const fx of effects) {
+      if (fx.type === 'play_sound') {
+        playSoundAsset(assetsRefForPlay.current, {
+          id: fx.assetId,
+          name: fx.assetName,
+        })
+      } else if (fx.type === 'log') {
+        setPlayLog((prev) => {
+          const next = `${prev}\n${fx.message}`
+          return next.length > 8000 ? next.slice(-8000) : next
+        })
+      }
+    }
+  }, [])
 
   const projectLabel = useMemo(() => {
     if (!projectPath) return null
@@ -209,6 +247,7 @@ export default function App() {
             if ('locked' in patch) allowed.locked = patch.locked
             if ('scriptId' in patch) allowed.scriptId = patch.scriptId
             if ('textureId' in patch) allowed.textureId = patch.textureId
+            if ('audioId' in patch) allowed.audioId = patch.audioId
             return { ...e, ...allowed }
           }
           return { ...e, ...patch }
@@ -345,6 +384,19 @@ export default function App() {
     flashStatus('Playing…')
     const jobs = collectReadyJobs(entities, scripts)
     const result = await runRoseGoldHooks(jobs)
+    let readyDirectives = parseStrataDirectives(result.stdout, jobs)
+    if (!result.ok || !readyDirectives.length) {
+      readyDirectives = previewReadyDirectives(entities, scripts)
+    }
+    if (readyDirectives.length) {
+      const { entities: next, sideEffects } = applyDirectives(
+        entities,
+        readyDirectives,
+        assetsRefForPlay.current,
+      )
+      applyTransient(() => next)
+      runSideEffects(sideEffects)
+    }
     const chunks = [
       result.message,
       result.stdout && `stdout:\n${result.stdout}`,
@@ -354,7 +406,7 @@ export default function App() {
     setPlayLog(chunks.join('\n\n'))
     if (!result.ok) flashStatus(result.message.slice(0, 80))
     else flashStatus('on_ready ok')
-  }, [entities, flashStatus, playing, scripts])
+  }, [applyTransient, entities, flashStatus, playing, runSideEffects, scripts])
 
   // Live on_update loop while Playing
   useEffect(() => {
@@ -367,11 +419,19 @@ export default function App() {
       tick += 1
       const snapshot = entitiesRefForPlay.current
       const scriptSnap = scriptsRefForPlay.current
-      const jobs = collectUpdateJobs(snapshot, scriptSnap, DT)
+      const assetSnap = assetsRefForPlay.current
+      const keysCsv = runtimeInput.keysCsv()
+      const jobs = collectUpdateJobs(snapshot, scriptSnap, DT, keysCsv)
       if (!jobs.length) {
-        const preview = previewUpdateDirectives(snapshot, scriptSnap)
+        const preview = previewUpdateDirectives(snapshot, scriptSnap, keysCsv)
         if (preview.length) {
-          applyTransient((prev) => applyDirectives(prev, preview))
+          const { entities: next, sideEffects } = applyDirectives(
+            snapshot,
+            preview,
+            assetSnap,
+          )
+          applyTransient(() => next)
+          runSideEffects(sideEffects)
         }
         return
       }
@@ -381,10 +441,16 @@ export default function App() {
 
       let directives = parseStrataDirectives(result.stdout, jobs)
       if (!result.ok || !directives.length) {
-        directives = previewUpdateDirectives(snapshot, scriptSnap)
+        directives = previewUpdateDirectives(snapshot, scriptSnap, keysCsv)
       }
       if (directives.length) {
-        applyTransient((prev) => applyDirectives(prev, directives))
+        const { entities: next, sideEffects } = applyDirectives(
+          snapshot,
+          directives,
+          assetSnap,
+        )
+        applyTransient(() => next)
+        runSideEffects(sideEffects)
       }
 
       const line = result.stdout.trim() || result.message
@@ -404,7 +470,7 @@ export default function App() {
       cancelled = true
       window.clearInterval(id)
     }
-  }, [playing, applyTransient])
+  }, [playing, applyTransient, runSideEffects, runtimeInput])
 
   const loadProjectFromPath = useCallback(
     async (path: string) => {
@@ -711,6 +777,8 @@ export default function App() {
           entities={entities}
           scripts={scripts}
           textures={textures}
+          audioClips={audioClips}
+          audioUrlById={audioUrlById}
           onChange={updateEntity}
         />
       </div>

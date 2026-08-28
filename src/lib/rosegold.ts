@@ -1,14 +1,23 @@
-import type { AssetItem, Entity } from '@/types/scene'
+import type { AssetItem, Entity, EntityKind } from '@/types/scene'
+import { uid } from '@/lib/utils'
 import { isTauri } from '@/lib/tauri'
 
 export const DEFAULT_PLAYER_SCRIPT = `fn on_ready(name: Str, x: Float, y: Float): Int {
     print("[ready]");
-    print(name);
+    print("strata:play_sound name=jump.wav");
     return 0;
 }
 
-fn on_update(name: Str, x: Float, y: Float, dt: Float): Int {
-    print("strata:move dx=1.5 dy=0");
+fn on_update(name: Str, x: Float, y: Float, dt: Float, keys: Str): Int {
+    if keys.contains("ArrowRight") || keys.contains("KeyD") {
+        print("strata:move dx=3 dy=0");
+    }
+    if keys.contains("ArrowLeft") || keys.contains("KeyA") {
+        print("strata:move dx=-3 dy=0");
+    }
+    if keys.contains("Space") {
+        print("strata:play_sound name=jump.wav");
+    }
     return 0;
 }
 
@@ -46,12 +55,19 @@ function rgFloat(n: number): string {
   return Number.isInteger(n) ? `${n}.0` : String(n)
 }
 
+function hookAcceptsKeys(content: string): boolean {
+  const m = content.match(/fn\s+on_update\s*\(([^)]*)\)/)
+  if (!m) return false
+  return m[1].includes('keys')
+}
+
 /** Strip an existing main and append a hook-driving main. */
 export function buildHookProgram(
   scriptContent: string,
   hook: 'on_ready' | 'on_update',
   entity: Entity,
   dt = 0.016,
+  keysCsv = '',
 ): string {
   const withoutMain = scriptContent.replace(
     /fn\s+main\s*\([^)]*\)\s*:\s*\w+\s*\{[\s\S]*?\n\}/m,
@@ -61,10 +77,15 @@ export function buildHookProgram(
   const fx = rgFloat(entity.x)
   const fy = rgFloat(entity.y)
   const fdt = rgFloat(dt)
-  const body =
-    hook === 'on_ready'
-      ? `    return on_ready(${nameLit}, ${fx}, ${fy});`
-      : `    return on_update(${nameLit}, ${fx}, ${fy}, ${fdt});`
+  const keysLit = JSON.stringify(keysCsv)
+  let body: string
+  if (hook === 'on_ready') {
+    body = `    return on_ready(${nameLit}, ${fx}, ${fy});`
+  } else if (hookAcceptsKeys(scriptContent)) {
+    body = `    return on_update(${nameLit}, ${fx}, ${fy}, ${fdt}, ${keysLit});`
+  } else {
+    body = `    return on_update(${nameLit}, ${fx}, ${fy}, ${fdt});`
+  }
 
   return `${withoutMain.trim()}\n\nfn main(): Int {\n${body}\n}\n`
 }
@@ -123,6 +144,7 @@ export function collectUpdateJobs(
   entities: Entity[],
   scripts: AssetItem[],
   dt: number,
+  keysCsv = '',
 ): HookJob[] {
   const scriptById = new Map(scripts.map((s) => [s.id, s]))
   const jobs: HookJob[] = []
@@ -134,7 +156,7 @@ export function collectUpdateJobs(
     jobs.push({
       label: `${e.name} on_update`,
       entityId: e.id,
-      source: buildHookProgram(script.content, 'on_update', e, dt),
+      source: buildHookProgram(script.content, 'on_update', e, dt, keysCsv),
     })
   }
   return jobs
@@ -155,6 +177,39 @@ export type StrataDirective =
   | { type: 'move'; entityId: string; dx: number; dy: number }
   | { type: 'rot'; entityId: string; degrees: number }
   | { type: 'set'; entityId: string; x?: number; y?: number; rot?: number }
+  | { type: 'spawn'; entityId: string; spec: SpawnSpec }
+  | { type: 'destroy'; entityId: string; targetName?: string }
+  | { type: 'play_sound'; assetId?: string; assetName?: string }
+  | { type: 'get'; entityId: string }
+
+export type SpawnSpec = {
+  name: string
+  kind: EntityKind
+  x: number
+  y: number
+  width: number
+  height: number
+  color: string
+  textureName?: string
+  scriptName?: string
+}
+
+export type RuntimeSideEffect =
+  | { type: 'play_sound'; assetId?: string; assetName?: string }
+  | { type: 'log'; message: string }
+
+export type ApplyResult = {
+  entities: Entity[]
+  sideEffects: RuntimeSideEffect[]
+}
+
+function parseKv(payload: string): Record<string, string> {
+  const out: Record<string, string> = {}
+  for (const m of payload.matchAll(/(\w+)=("([^"]*)"|[^\s]+)/g)) {
+    out[m[1]] = m[3] ?? m[2]
+  }
+  return out
+}
 
 /** Parse `strata:...` lines from RoseGold stdout, scoped to a job's entity. */
 export function parseStrataDirectives(
@@ -188,17 +243,21 @@ function parseDirectiveBlock(text: string, entityId: string): StrataDirective[] 
     const trimmed = line.trim()
     if (!trimmed.startsWith('strata:')) continue
     const payload = trimmed.slice('strata:'.length).trim()
-    if (payload.startsWith('move')) {
-      const dx = Number(payload.match(/dx=(-?\d+(?:\.\d+)?)/)?.[1] ?? 0)
-      const dy = Number(payload.match(/dy=(-?\d+(?:\.\d+)?)/)?.[1] ?? 0)
+    const cmd = payload.split(/\s+/)[0]
+    const rest = payload.slice(cmd.length).trim()
+    const kv = parseKv(rest)
+
+    if (cmd === 'move') {
+      const dx = Number(kv.dx ?? payload.match(/dx=(-?\d+(?:\.\d+)?)/)?.[1] ?? 0)
+      const dy = Number(kv.dy ?? payload.match(/dy=(-?\d+(?:\.\d+)?)/)?.[1] ?? 0)
       out.push({ type: 'move', entityId, dx, dy })
-    } else if (payload.startsWith('rot')) {
-      const degrees = Number(payload.match(/(-?\d+(?:\.\d+)?)/)?.[1] ?? 0)
+    } else if (cmd === 'rot') {
+      const degrees = Number(kv.degrees ?? payload.match(/(-?\d+(?:\.\d+)?)/)?.[1] ?? 0)
       out.push({ type: 'rot', entityId, degrees })
-    } else if (payload.startsWith('set')) {
-      const x = payload.match(/x=(-?\d+(?:\.\d+)?)/)?.[1]
-      const y = payload.match(/y=(-?\d+(?:\.\d+)?)/)?.[1]
-      const rot = payload.match(/rot=(-?\d+(?:\.\d+)?)/)?.[1]
+    } else if (cmd === 'set') {
+      const x = kv.x ?? payload.match(/x=(-?\d+(?:\.\d+)?)/)?.[1]
+      const y = kv.y ?? payload.match(/y=(-?\d+(?:\.\d+)?)/)?.[1]
+      const rot = kv.rot ?? payload.match(/rot=(-?\d+(?:\.\d+)?)/)?.[1]
       out.push({
         type: 'set',
         entityId,
@@ -206,7 +265,51 @@ function parseDirectiveBlock(text: string, entityId: string): StrataDirective[] 
         y: y !== undefined ? Number(y) : undefined,
         rot: rot !== undefined ? Number(rot) : undefined,
       })
+    } else if (cmd === 'spawn') {
+      out.push({
+        type: 'spawn',
+        entityId,
+        spec: {
+          name: kv.name || 'Entity',
+          kind: (kv.kind as EntityKind) || 'sprite',
+          x: Number(kv.x ?? 0),
+          y: Number(kv.y ?? 0),
+          width: Number(kv.w ?? kv.width ?? 32),
+          height: Number(kv.h ?? kv.height ?? 32),
+          color: kv.color || '#61afef',
+          textureName: kv.texture,
+          scriptName: kv.script,
+        },
+      })
+    } else if (cmd === 'destroy') {
+      out.push({ type: 'destroy', entityId, targetName: kv.name })
+    } else if (cmd === 'play_sound' || cmd === 'sound') {
+      out.push({
+        type: 'play_sound',
+        assetId: kv.id,
+        assetName: kv.name,
+      })
+    } else if (cmd === 'get') {
+      out.push({ type: 'get', entityId })
     }
+  }
+  return out
+}
+
+/** Browser / fallback for on_ready directives embedded in script source. */
+export function previewReadyDirectives(
+  entities: Entity[],
+  scripts: AssetItem[],
+): StrataDirective[] {
+  const scriptById = new Map(scripts.map((s) => [s.id, s]))
+  const out: StrataDirective[] = []
+  for (const e of entities) {
+    if (!e.scriptId) continue
+    const script = scriptById.get(e.scriptId)
+    if (!script?.content || !scriptHasHook(script.content, 'on_ready')) continue
+    const m = script.content.match(/fn\s+on_ready[^{]*\{([\s\S]*?)\n\}/)
+    const body = m?.[1] ?? script.content
+    out.push(...parseDirectiveBlock(body, e.id))
   }
   return out
 }
@@ -215,33 +318,132 @@ function parseDirectiveBlock(text: string, entityId: string): StrataDirective[] 
 export function previewUpdateDirectives(
   entities: Entity[],
   scripts: AssetItem[],
+  keysCsv = '',
 ): StrataDirective[] {
   const scriptById = new Map(scripts.map((s) => [s.id, s]))
+  const keys = keysCsv.split(',').filter(Boolean)
   const out: StrataDirective[] = []
+
   for (const e of entities) {
     if (!e.scriptId || e.locked) continue
     const script = scriptById.get(e.scriptId)
     if (!script?.content || !scriptHasHook(script.content, 'on_update')) continue
-    const embedded = [
-      ...script.content.matchAll(/strata:(?:move|rot|set)[^"'\n]*/g),
-    ].map((m) => m[0])
-    if (embedded.length) {
-      out.push(...parseDirectiveBlock(embedded.join('\n'), e.id))
+
+    const lines = script.content.split('\n')
+    const activeLines: string[] = []
+
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i]
+      if (!line.includes('strata:')) continue
+      let gated = false
+      let allowed = true
+      for (let j = i; j >= Math.max(0, i - 4); j--) {
+        const keyMatch = lines[j].match(/keys\.contains\("([^"]+)"\)/)
+        if (keyMatch) {
+          gated = true
+          allowed = keys.includes(keyMatch[1])
+          break
+        }
+      }
+      if (!gated || allowed) activeLines.push(line.trim())
+    }
+
+    if (activeLines.length) {
+      out.push(...parseDirectiveBlock(activeLines.join('\n'), e.id))
       continue
     }
-    out.push({ type: 'rot', entityId: e.id, degrees: 4 })
+
+    if (!script.content.includes('keys.contains')) {
+      const embedded = [...script.content.matchAll(/strata:[^"'\n]+/g)].map(
+        (m) => m[0],
+      )
+      if (embedded.length) {
+        out.push(...parseDirectiveBlock(embedded.join('\n'), e.id))
+      } else {
+        out.push({ type: 'rot', entityId: e.id, degrees: 4 })
+      }
+    }
   }
   return out
+}
+
+function resolveAssetId(
+  assets: AssetItem[],
+  type: AssetItem['type'],
+  name?: string,
+): string | null {
+  if (!name) return null
+  const lower = name.toLowerCase()
+  const hit = assets.find(
+    (a) =>
+      a.type === type &&
+      (a.name.toLowerCase() === lower ||
+        a.relativePath?.toLowerCase().endsWith(lower)),
+  )
+  return hit?.id ?? null
 }
 
 export function applyDirectives(
   entities: Entity[],
   directives: StrataDirective[],
-): Entity[] {
-  if (!directives.length) return entities
-  const map = new Map(entities.map((e) => [e.id, { ...e }]))
+  assets: AssetItem[] = [],
+): ApplyResult {
+  const sideEffects: RuntimeSideEffect[] = []
+  if (!directives.length) return { entities, sideEffects }
+
+  let list = entities.map((e) => ({ ...e }))
+  const byId = () => new Map(list.map((e) => [e.id, e]))
+  const byName = () => new Map(list.map((e) => [e.name.toLowerCase(), e]))
+
   for (const d of directives) {
-    const e = map.get(d.entityId)
+    if (d.type === 'play_sound') {
+      sideEffects.push({
+        type: 'play_sound',
+        assetId: d.assetId,
+        assetName: d.assetName,
+      })
+      continue
+    }
+    if (d.type === 'get') {
+      const e = byId().get(d.entityId)
+      if (e) {
+        sideEffects.push({
+          type: 'log',
+          message: `strata:state name=${e.name} x=${e.x} y=${e.y} rot=${e.rotation} w=${e.width} h=${e.height}`,
+        })
+      }
+      continue
+    }
+    if (d.type === 'destroy') {
+      const targetId = d.targetName
+        ? byName().get(d.targetName.toLowerCase())?.id
+        : d.entityId
+      if (targetId) list = list.filter((e) => e.id !== targetId)
+      continue
+    }
+    if (d.type === 'spawn') {
+      const spec = d.spec
+      list.push({
+        id: uid('ent'),
+        name: spec.name,
+        kind: spec.kind,
+        parentId: null,
+        scriptId: resolveAssetId(assets, 'script', spec.scriptName),
+        textureId: resolveAssetId(assets, 'texture', spec.textureName),
+        audioId: null,
+        x: spec.x,
+        y: spec.y,
+        width: spec.width,
+        height: spec.height,
+        rotation: 0,
+        color: spec.color,
+        visible: true,
+        locked: false,
+      })
+      continue
+    }
+
+    const e = byId().get(d.entityId)
     if (!e || e.locked) continue
     if (d.type === 'move') {
       e.x = Math.round((e.x + d.dx) * 100) / 100
@@ -254,7 +456,8 @@ export function applyDirectives(
       if (d.rot !== undefined) e.rotation = d.rot
     }
   }
-  return entities.map((e) => map.get(e.id) ?? e)
+
+  return { entities: list, sideEffects }
 }
 
 export async function runRoseGoldSource(
