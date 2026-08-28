@@ -1,5 +1,6 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use crate::parser::*;
@@ -7,6 +8,68 @@ use crate::{RuntimeError, Span};
 
 type ArrayRef = Rc<RefCell<Vec<Value>>>;
 type MapRef = Rc<RefCell<HashMap<String, Value>>>;
+type ModuleRef = Rc<RefCell<Module>>;
+
+pub trait ModuleResolver {
+  fn resolve(&self, name: &str) -> Option<String>;
+}
+
+pub struct HashMapResolver {
+  sources: HashMap<String, String>,
+}
+
+impl HashMapResolver {
+  pub fn new(sources: HashMap<String, String>) -> Self {
+    Self { sources }
+  }
+}
+
+impl ModuleResolver for HashMapResolver {
+  fn resolve(&self, name: &str) -> Option<String> {
+    self.sources.get(name).cloned()
+  }
+}
+
+pub struct FileModuleResolver {
+  base: PathBuf,
+}
+
+impl FileModuleResolver {
+  pub fn new(base: impl AsRef<Path>) -> Self {
+    Self { base: base.as_ref().to_path_buf() }
+  }
+}
+
+impl ModuleResolver for FileModuleResolver {
+  fn resolve(&self, name: &str) -> Option<String> {
+    let path = self.base.join(format!("{}.rg", name));
+    if path.exists() {
+      return std::fs::read_to_string(path).ok();
+    }
+    let path = self.base.join(name).join("main.rg");
+    if path.exists() {
+      return std::fs::read_to_string(path).ok();
+    }
+    None
+  }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Module {
+  pub functions: HashMap<String, FnDecl>,
+  pub values: HashMap<String, Value>,
+  pub native: Option<String>,
+}
+
+impl Module {
+  pub fn new() -> Self {
+    Self { functions: HashMap::new(), values: HashMap::new(), native: None }
+  }
+
+  pub fn native(module: impl Into<String>) -> Self {
+    Self { functions: HashMap::new(), values: HashMap::new(), native: Some(module.into()) }
+  }
+}
 
 fn runtime_err(message: impl Into<String>, span: Span) -> RuntimeError {
   RuntimeError { message: message.into(), span }
@@ -24,6 +87,8 @@ pub enum Value {
   Map(MapRef),
   Range(i64, i64, bool),
   Enum { module: String, variant: String, value: Option<Box<Value>> },
+  Module(ModuleRef),
+  NativeFn { module: String, name: String },
 }
 
 impl Value {
@@ -39,6 +104,8 @@ impl Value {
         if *inclusive { start <= end } else { start < end }
       }
       Value::Enum { value, .. } => value.is_some(),
+      Value::Module(_) => true,
+      Value::NativeFn { .. } => true,
       Value::None => false,
       Value::Void => false,
     }
@@ -56,6 +123,8 @@ impl Value {
       Value::Map(_) => "Map".to_string(),
       Value::Range(_, _, _) => "Range".to_string(),
       Value::Enum { module, variant, .. } => format!("{}.{}", module, variant),
+      Value::Module(_) => "Module".to_string(),
+      Value::NativeFn { module, name } => format!("{}.{}", module, name),
     }
   }
 
@@ -81,6 +150,8 @@ impl Value {
       Value::Enum { module, variant, value } => {
         if let Some(v) = value { format!("{}.{}({})", module, variant, v.to_string()) } else { format!("{}.{}", module, variant) }
       }
+      Value::Module(m) => format!("module({})", m.borrow().functions.keys().cloned().collect::<Vec<_>>().join(", ")),
+      Value::NativeFn { module, name } => format!("{}.{}", module, name),
     }
   }
 }
@@ -90,6 +161,8 @@ pub struct EvalContext {
   pub env: Environment,
   pub functions: HashMap<String, FnDecl>,
   pub stdlib: HashMap<String, HashMap<String, Value>>,
+  module_resolver: Rc<RefCell<dyn ModuleResolver>>,
+  loaded_modules: Rc<RefCell<HashMap<String, ModuleRef>>>,
 }
 
 pub struct Environment {
@@ -137,11 +210,17 @@ impl Environment {
 
 impl EvalContext {
   pub fn new() -> Self {
+    Self::with_resolver(Rc::new(RefCell::new(HashMapResolver::new(HashMap::new()))))
+  }
+
+  pub fn with_resolver(resolver: Rc<RefCell<dyn ModuleResolver>>) -> Self {
     let mut ctx = Self {
       stdout: String::new(),
       env: Environment::new(),
       functions: HashMap::new(),
       stdlib: HashMap::new(),
+      module_resolver: resolver,
+      loaded_modules: Rc::new(RefCell::new(HashMap::new())),
     };
     ctx.init_stdlib();
     ctx
@@ -165,12 +244,22 @@ impl EvalContext {
   }
 
   pub fn run(&mut self, program: &[Item]) -> Result<Value, RuntimeError> {
-    // First pass: register function declarations and top-level consts
+    // First pass: register function declarations and process imports
     for item in program {
       match item {
         Item::FnDecl(f) => {
           self.functions.insert(f.name.clone(), f.clone());
         }
+        Item::Import(i) => {
+          self.eval_import(i, Span::default())?;
+        }
+        _ => {}
+      }
+    }
+
+    // Second pass: evaluate top-level consts and vars
+    for item in program {
+      match item {
         Item::ConstDecl(c) => {
           let value = self.eval_expr(&c.value)?;
           self.env.define(&c.name, value);
@@ -183,7 +272,7 @@ impl EvalContext {
           };
           self.env.define(&v.name, value);
         }
-        Item::Import(_) => {}
+        _ => {}
       }
     }
 
@@ -195,10 +284,116 @@ impl EvalContext {
     }
   }
 
+  fn eval_import(&mut self, import: &Import, span: Span) -> Result<(), RuntimeError> {
+    if import.path.is_empty() {
+      return Err(runtime_err("empty import path", span));
+    }
+    let module_name = &import.path[0];
+
+    // Native stdlib modules (str, math, checks, option, Option, result, Result) are already
+    // wired via call_qualified; imports of them just bring the names into scope.
+    if self.stdlib.contains_key(module_name) {
+      if import.path.len() == 1 {
+        let name = import.alias.as_ref().unwrap_or(module_name);
+        self.env.define(name, Value::Module(Rc::new(RefCell::new(Module::native(module_name.clone())))));
+      } else if import.path.len() == 2 {
+        let item_name = &import.path[1];
+        let alias = import.alias.as_ref().unwrap_or(item_name).clone();
+        self.env.define(&alias, Value::NativeFn { module: module_name.clone(), name: item_name.clone() });
+      } else {
+        return Err(runtime_err(format!("nested imports longer than 2 segments are not supported: {:?}", import.path), span));
+      }
+      return Ok(());
+    }
+
+    let module = self.load_module(module_name, span)?;
+    if import.path.len() == 1 {
+      // import module;
+      let name = import.alias.as_ref().unwrap_or(module_name);
+      self.env.define(name, Value::Module(module));
+    } else if import.path.len() == 2 {
+      // from module import item;
+      let item_name = &import.path[1];
+      let m = module.borrow();
+      let alias = import.alias.as_ref().unwrap_or(item_name).clone();
+      if let Some(decl) = m.functions.get(item_name) {
+        self.functions.insert(alias.clone(), decl.clone());
+      } else if let Some(value) = m.values.get(item_name) {
+        self.env.define(&alias, value.clone());
+      } else {
+        return Err(runtime_err(format!("module '{}' has no export '{}'", module_name, item_name), span));
+      }
+    } else {
+      return Err(runtime_err(format!("nested imports longer than 2 segments are not supported: {:?}", import.path), span));
+    }
+    Ok(())
+  }
+
+  fn load_module(&mut self, name: &str, span: Span) -> Result<ModuleRef, RuntimeError> {
+    {
+      if let Some(m) = self.loaded_modules.borrow().get(name) {
+        return Ok(m.clone());
+      }
+    }
+    let source = self
+      .module_resolver
+      .borrow()
+      .resolve(name)
+      .ok_or_else(|| runtime_err(format!("module '{}' not found", name), span))?;
+    let tokens = crate::lexer::Lexer::new(&source)
+      .tokenize()
+      .map_err(|e| runtime_err(e, span))?;
+    let program = crate::parser::Parser::new(tokens)
+      .parse()
+      .map_err(|e| runtime_err(e, span))?;
+
+    let mut module = Module::new();
+    let mut module_ctx = EvalContext::with_resolver(self.module_resolver.clone());
+    module_ctx.loaded_modules = self.loaded_modules.clone();
+
+    for item in &program {
+      if let Item::FnDecl(f) = item {
+        module.functions.insert(f.name.clone(), f.clone());
+        module_ctx.functions.insert(f.name.clone(), f.clone());
+      }
+    }
+
+    for item in &program {
+      if let Item::Import(i) = item {
+        module_ctx.eval_import(i, span)?;
+      }
+    }
+
+    for item in &program {
+      match item {
+        Item::ConstDecl(c) => {
+          let value = module_ctx.eval_expr(&c.value)?;
+          module.values.insert(c.name.clone(), value);
+        }
+        Item::VarDecl(v) => {
+          let value = match &v.value {
+            Some(e) => module_ctx.eval_expr(e)?,
+            None => Value::None,
+          };
+          module.values.insert(v.name.clone(), value);
+        }
+        _ => {}
+      }
+    }
+
+    let rc = Rc::new(RefCell::new(module));
+    self.loaded_modules.borrow_mut().insert(name.to_string(), rc.clone());
+    Ok(rc)
+  }
+
   fn call_fn(&mut self, name: &str, args: Vec<Value>, span: Span) -> Result<Value, RuntimeError> {
     let decl = self.functions.get(name).ok_or_else(|| runtime_err(format!("undefined function '{}'", name), span))?.clone();
+    self.call_fn_decl(&decl, args, span)
+  }
+
+  fn call_fn_decl(&mut self, decl: &FnDecl, args: Vec<Value>, span: Span) -> Result<Value, RuntimeError> {
     if args.len() != decl.params.len() {
-      return Err(runtime_err(format!("{} expected {} args, got {}", name, decl.params.len(), args.len()), span));
+      return Err(runtime_err(format!("{} expected {} args, got {}", decl.name, decl.params.len(), args.len()), span));
     }
     self.env.push_scope();
     for (param, arg) in decl.params.iter().zip(args) {
@@ -450,6 +645,16 @@ impl EvalContext {
               _ => Err(runtime_err(format!("Map has no member '{}'", name), span)),
             }
           }
+          Value::Module(m) => {
+            let m = m.borrow();
+            if m.functions.contains_key(name) {
+              return Err(runtime_err(format!("function '{}' must be called with arguments", name), span));
+            }
+            if let Some(value) = m.values.get(name) {
+              return Ok(value.clone());
+            }
+            Err(runtime_err(format!("module has no member '{}'", name), span))
+          }
           _ => {
             // Try stdlib module lookup when a module is stored as a value
             // (std modules are not values, so we handle qualified calls separately)
@@ -557,6 +762,9 @@ impl EvalContext {
   }
 
   fn call_builtin_or_fn(&mut self, name: &str, args: Vec<Value>, span: Span) -> Result<Value, RuntimeError> {
+    if let Some(Value::NativeFn { module, name: fn_name }) = self.env.get(name) {
+      return self.call_qualified(&module, &fn_name, args, span);
+    }
     match name {
       "print" => {
         let parts: Vec<String> = args.iter().map(|a| a.to_string()).collect();
@@ -689,6 +897,18 @@ impl EvalContext {
         }
         _ => Err(runtime_err(format!("Enum {} has no method '{}'", module, variant), span)),
       },
+      Value::Module(m) => {
+        let m = m.borrow();
+        if let Some(decl) = m.functions.get(name) {
+          return self.call_fn_decl(decl, _args, span);
+        }
+        if _args.is_empty() {
+          if let Some(value) = m.values.get(name) {
+            return Ok(value.clone());
+          }
+        }
+        Err(runtime_err(format!("module has no member '{}'", name), span))
+      }
       _ => Err(runtime_err(format!("type {} has no method '{}'", object.type_name(), name), span)),
     }
   }

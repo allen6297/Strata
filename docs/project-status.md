@@ -70,7 +70,7 @@ The interpreter is getting close to feature parity with the original Python vers
 
 ### 4.1 RoseGold language gaps
 
-1. **Real module import resolution** — `from module import Item;` and `import module;` are parsed, but they do not yet load `.rg` files from disk. The `Option` and `Result` modules are currently hard-coded in the interpreter.
+1. **Real module import resolution** — done. `import module;` and `from module import Item;` now load `.rg` files from disk via a `ModuleResolver` (with an in-memory resolver for tests). Native stdlib modules (`str`, `math`, `checks`, `Option`, `Result`) are still wired natively but can be imported.
 2. **Structs / classes / enums with custom definitions** — only built-in `Option` and `Result` exist; user-defined `struct`/`enum` types are not parsed.
 3. **Type checker** — type annotations are parsed and ignored at runtime. A static check phase is needed for safer scripts.
 4. **More stdlib parity** — `io` (file I/O), full `Array` module, and any remaining `str`/`math`/`checks` functions that the upstream Python examples rely on.
@@ -104,7 +104,7 @@ The fastest way to extend the interpreter is to pick an upstream RoseGold-PY exa
 
 Alternatively, the next highest-impact items are:
 
-- **File-based module imports** (unlocks real `.rg` standard library files).
+- **File-based module imports** (done) — `import module;` and `from module import item;` now work with on-disk `.rg` files.
 - **Struct/enum definitions** (unlocks user-defined data types).
 - **Script host bridge** (lets scripts read and write scene state during play).
 

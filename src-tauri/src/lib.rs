@@ -59,19 +59,14 @@ fn unique_rosegold_dir(base: &str) -> Result<PathBuf, String> {
   Ok(dir)
 }
 
-fn run_rosegold_native(source: &str) -> RunResult {
-  let native = rosegold::run_source(source);
-  RunResult {
-    ok: native.ok,
-    stdout: native.stdout,
-    stderr: native.stderr,
-    message: native.message,
-  }
-}
-
 fn run_rosegold_file(path: &Path) -> Result<RunResult, String> {
-  let source = fs::read_to_string(path).map_err(|e| e.to_string())?;
-  Ok(run_rosegold_native(&source))
+  let result = rosegold::run_file(path);
+  Ok(RunResult {
+    ok: result.ok,
+    stdout: result.stdout,
+    stderr: result.stderr,
+    message: result.message,
+  })
 }
 
 

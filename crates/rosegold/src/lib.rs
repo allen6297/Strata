@@ -2,7 +2,12 @@ pub mod interpreter;
 pub mod lexer;
 pub mod parser;
 
-pub use interpreter::{EvalContext, Value};
+use std::collections::HashMap;
+use std::path::Path;
+use std::rc::Rc;
+use std::cell::RefCell;
+
+pub use interpreter::{EvalContext, FileModuleResolver, HashMapResolver, Module, ModuleResolver, Value};
 pub use lexer::{Lexer, Token, TokenKind};
 pub use parser::{Block, Expr, FnDecl, Item, Literal, Parser, Stmt, Type};
 
@@ -37,7 +42,7 @@ pub struct RunResult {
   pub message: String,
 }
 
-pub fn run_source(source: &str) -> RunResult {
+fn run_with_context(source: &str, ctx: &mut EvalContext) -> RunResult {
   let mut lexer = Lexer::new(source);
   let tokens = match lexer.tokenize() {
     Ok(tokens) => tokens,
@@ -62,11 +67,10 @@ pub fn run_source(source: &str) -> RunResult {
       }
     }
   };
-  let mut ctx = EvalContext::new();
   match ctx.run(&program) {
     Ok(_) => RunResult {
       ok: true,
-      stdout: ctx.stdout,
+      stdout: ctx.stdout.clone(),
       stderr: String::new(),
       message: "RoseGold finished".to_string(),
     },
@@ -74,12 +78,42 @@ pub fn run_source(source: &str) -> RunResult {
       let msg = e.to_string();
       RunResult {
         ok: false,
-        stdout: ctx.stdout,
+        stdout: ctx.stdout.clone(),
         stderr: msg.clone(),
         message: msg,
       }
     }
   }
+}
+
+pub fn run_source(source: &str) -> RunResult {
+  let mut ctx = EvalContext::new();
+  run_with_context(source, &mut ctx)
+}
+
+pub fn run_source_with_modules(source: &str, modules: HashMap<String, String>) -> RunResult {
+  let resolver = Rc::new(RefCell::new(HashMapResolver::new(modules)));
+  let mut ctx = EvalContext::with_resolver(resolver);
+  run_with_context(source, &mut ctx)
+}
+
+pub fn run_file(path: &Path) -> RunResult {
+  let source = match std::fs::read_to_string(path) {
+    Ok(s) => s,
+    Err(e) => {
+      let msg = format!("failed to read file: {}", e);
+      return RunResult {
+        ok: false,
+        stdout: String::new(),
+        stderr: msg.clone(),
+        message: msg,
+      }
+    }
+  };
+  let base = path.parent().unwrap_or(Path::new("."));
+  let resolver = Rc::new(RefCell::new(FileModuleResolver::new(base)));
+  let mut ctx = EvalContext::with_resolver(resolver);
+  run_with_context(&source, &mut ctx)
 }
 
 #[cfg(test)]
@@ -422,5 +456,100 @@ fn main(): Int {
     assert!(out.contains("5")); // b.pop()
     assert!(out.contains("4")); // a.len after b.pop
     assert!(out.contains("4")); // b[b.len() - 1]
+  }
+
+  #[test]
+  fn import_module_in_memory() {
+    let mut modules = HashMap::new();
+    modules.insert(
+      "calc".to_string(),
+      r#"
+fn add(a: Int, b: Int): Int {
+    return a + b;
+}
+
+fn double(n: Int): Int {
+    return n * 2;
+}
+"#
+      .to_string(),
+    );
+    let result = run_source_with_modules(
+      r#"
+import calc;
+fn main(): Int {
+    print(calc.add(2, 3));
+    print(calc.double(4));
+    return 0;
+}
+"#,
+      modules,
+    );
+    assert!(result.ok, "{}", result.stderr);
+    assert!(result.stdout.contains("5"));
+    assert!(result.stdout.contains("8"));
+  }
+
+  #[test]
+  fn from_module_import_function() {
+    let mut modules = HashMap::new();
+    modules.insert(
+      "strings".to_string(),
+      r#"
+fn repeat(s: String, n: Int): String {
+    var out: String = "";
+    var i: Int = 0;
+    while i < n {
+        out = out + s;
+        i = i + 1;
+    }
+    return out;
+}
+"#
+      .to_string(),
+    );
+    let result = run_source_with_modules(
+      r#"
+from strings import repeat;
+fn main(): Int {
+    print(repeat("a", 3));
+    return 0;
+}
+"#,
+      modules,
+    );
+    assert!(result.ok, "{}", result.stderr);
+    assert!(result.stdout.contains("aaa"));
+  }
+
+  #[test]
+  fn import_module_from_file() {
+    use std::fs;
+    let dir = std::env::temp_dir().join("rosegold_module_test");
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(
+      dir.join("greet.rg"),
+      r#"
+fn greet(name: String): String {
+    return f"hello {name}";
+}
+"#,
+    )
+    .unwrap();
+    fs::write(
+      dir.join("main.rg"),
+      r#"
+import greet;
+fn main(): Int {
+    print(greet.greet("world"));
+    return 0;
+}
+"#,
+    )
+    .unwrap();
+    let result = run_file(&dir.join("main.rg"));
+    assert!(result.ok, "{}", result.stderr);
+    assert!(result.stdout.contains("hello world"));
   }
 }
