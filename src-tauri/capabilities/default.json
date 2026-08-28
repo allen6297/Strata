@@ -1,12 +1,24 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "enables the default permissions",
+  "description": "Capability for the main Strata window",
   "windows": ["main"],
   "permissions": [
     "core:default",
     "dialog:default",
     "fs:default",
+    "fs:allow-read-text-file",
+    "fs:allow-write-text-file",
+    "fs:allow-create",
+    {
+      "identifier": "fs:scope",
+      "allow": [
+        { "path": "$HOME/**" },
+        { "path": "$DOCUMENT/**" },
+        { "path": "$DESKTOP/**" },
+        { "path": "$DOWNLOAD/**" }
+      ]
+    },
     {
       "identifier": "allow-run-rosegold",
       "allow": [{ "name": "run_rosegold" }]
@@ -30,6 +42,22 @@
     {
       "identifier": "allow-read-file-base64",
       "allow": [{ "name": "read_file_base64" }]
+    },
+    {
+      "identifier": "allow-engine-info",
+      "allow": [{ "name": "engine_info" }]
+    },
+    {
+      "identifier": "allow-engine-load-scene",
+      "allow": [{ "name": "engine_load_scene" }]
+    },
+    {
+      "identifier": "allow-engine-snapshot",
+      "allow": [{ "name": "engine_snapshot" }]
+    },
+    {
+      "identifier": "allow-engine-tick",
+      "allow": [{ "name": "engine_tick" }]
     }
   ]
 }

@@ -23,3 +23,11 @@ src-tauri/target
 *.njsproj
 *.sln
 *.sw?
+
+# Tauri / Rust
+src-tauri/target
+src-tauri/gen/schemas
+/target
+crates/strata-engine/target
+
+

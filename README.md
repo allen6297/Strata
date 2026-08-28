@@ -1,10 +1,12 @@
 # Strata — Scene Editor
 
-A lightweight **2D game engine editor** with hierarchy, viewport gizmos, RoseGold scripts, project folders, and a Tauri desktop shell.
+A **2D/3D** custom engine with a React editor shell. Runtime lives in Rust (`crates/strata-engine`); the 2D viewport uses canvas with textures and gizmos; 3D mode uses Three.js as an **editor view only**. Desktop packaging is **Tauri 2**.
+
+Scripting language: [RoseGold](https://github.com/allen6297/RoseGold-PY). Play runs `on_ready` once, then ticks `on_update` while playing. Desktop uses real `rosegold`; the browser applies the same directives from script source as a preview.
 
 Local path: `/Users/kalob/Code/strata`.
 
-## Browser
+## Run locally (browser)
 
 ```bash
 npm install
@@ -13,7 +15,7 @@ npm run dev
 
 Open [http://127.0.0.1:4521](http://127.0.0.1:4521).
 
-## Desktop (Tauri)
+## Run as desktop (Tauri)
 
 Requires [Rust](https://rustup.rs/) + Xcode CLT on macOS.
 
@@ -22,13 +24,15 @@ npm install
 npm run tauri:dev
 ```
 
+Production bundle:
+
 ```bash
 npm run tauri:build
 ```
 
 ## Live Play
 
-On **Play**, Strata runs `on_ready` once, then ticks `on_update` while playing. The viewport follows **Main Camera**, hides editor gizmos, and restores your edit camera when you stop.
+On **Play**, Strata runs `on_ready` once, then ticks `on_update` while playing. The 2D viewport follows **Main Camera**, hides editor gizmos, and restores your edit camera when you stop. In Tauri, the Rust engine also loads the scene and ticks a `NullScriptHost` stub.
 
 ### Input (browser preview + desktop)
 
@@ -67,7 +71,12 @@ print("strata:get");
 | `strata:destroy` | Remove entity (or `name=Other`) |
 | `strata:get` | Log entity state to the play log |
 
-Desktop uses real `rosegold`; the browser applies the same directives from script source as a preview.
+## Scene modes
+
+- **2D** — canvas viewport with snap, textures, parenting, and RoseGold play
+- **3D** — Three.js editor adapter with orbit camera, mesh/light entities, and euler transforms
+
+Scenes are JSON `.scene` v2 (`mode` + 3D fields); v1 files migrate on open. Scenes are mirrored to `localStorage`; desktop **Save** / **Open** use native file dialogs.
 
 ## Textures
 
@@ -82,8 +91,8 @@ Assign a texture in the Inspector, or **double-click** a texture asset. Sample i
 
 ## Editing
 
-- **Snap (G)** — magnet toggle; hold Shift while dragging to bypass
-- **Gizmo** — red X / green Y handles on the primary selection
+- **Snap (G)** — magnet toggle in 2D; hold Shift while dragging to bypass
+- **Gizmo** — red X / green Y handles on the primary selection (2D)
 - **Parenting** — drag in Hierarchy or Inspector parent field
 - **Multi-select** — ⌘/Ctrl click, Shift range
 
@@ -91,10 +100,10 @@ Assign a texture in the Inspector, or **double-click** a texture asset. Sample i
 
 | Key | Action |
 |-----|--------|
-| `V` / `H` | Select / Pan |
-| `G` | Toggle snap |
+| `V` / `H` | Select / Pan (2D) or orbit (3D) |
+| `G` | Toggle snap (2D) |
 | `Space` | Play / Stop |
-| `Ctrl/Cmd+S` | Download `.scene` |
+| `Ctrl/Cmd+S` | Save scene |
 | `Ctrl/Cmd+Z` / `Shift+Z` | Undo / Redo |
 | `Ctrl/Cmd+D` | Duplicate |
 | `Del` | Delete selection |

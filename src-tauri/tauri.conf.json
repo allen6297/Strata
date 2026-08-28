@@ -20,7 +20,8 @@
         "minHeight": 640,
         "resizable": true,
         "fullscreen": false,
-        "center": true
+        "center": true,
+        "backgroundColor": "#1a0e12"
       }
     ],
     "security": {
@@ -31,8 +32,8 @@
     "active": true,
     "targets": "all",
     "category": "DeveloperTool",
-    "shortDescription": "2D game engine scene editor",
-    "longDescription": "Strata is a lightweight 2D game engine scene editor with hierarchy, viewport, inspector, and scene save/load.",
+    "shortDescription": "2D/3D game engine scene editor",
+    "longDescription": "Strata is a lightweight 2D/3D game engine scene editor with hierarchy, viewport, inspector, RoseGold scripts, and scene save/load.",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

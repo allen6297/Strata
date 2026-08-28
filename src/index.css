@@ -1,22 +1,71 @@
 @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap');
 @import 'tailwindcss';
 
-:root {
-  --bg-app: #14161a;
-  --bg-panel: #1a1d23;
-  --bg-panel-raised: #22262e;
-  --bg-input: #12141a;
-  --border: #2c313c;
-  --border-strong: #3a4150;
-  --text: #e8eaef;
-  --text-muted: #8b93a7;
-  --accent: #3db8a8;
-  --accent-dim: #2a8f82;
-  --danger: #e06c75;
-  --warn: #e5c07b;
-  --select: #3db8a833;
-  --viewport: #0e1014;
-  --grid: #1f2430;
+/* Tile / Pillars — dark (default)
+   Panels stay wine; viewport sinks cooler/deeper so chrome separates.
+   Accent leans peach (#F2C8B4) so selection/brand pop on dark. */
+:root,
+[data-theme='dark'] {
+  --bg-app: #1a0e12;
+  --bg-panel: #2a151c;
+  --bg-panel-raised: #3d1f2a;
+  --bg-input: #12090c;
+  --bg-hover: #472633;
+  --border: #4e2e38;
+  --border-strong: #6e4652;
+  --text: #f7ede6;
+  --text-muted: #b8978e;
+  --accent: #f2c8b4;
+  --accent-dim: #d4848e;
+  --accent-soft: #f2c8b4;
+  --accent-warm: #d4a574;
+  --accent-on: #241016;
+  --accent-hover: #f8d9c8;
+  --danger: #e0707a;
+  --warn: #d4a574;
+  --select: #f2c8b428;
+  --viewport: #10080b;
+  --grid: #2a151c;
+  --axis: #5a3844;
+  --brand-gradient: linear-gradient(
+    135deg,
+    #f2c8b4 0%,
+    #d4848e 50%,
+    #d4a574 100%
+  );
+  --pulse-accent: 242, 200, 180;
+}
+
+/* Tile / Pillars — light */
+[data-theme='light'] {
+  --bg-app: #f7ede6;
+  --bg-panel: #f0e2d8;
+  --bg-panel-raised: #e8d5c8;
+  --bg-input: #fff8f3;
+  --bg-hover: #e4cfc3;
+  --border: #d4b8aa;
+  --border-strong: #b89688;
+  --text: #3a1e28;
+  --text-muted: #7a5a58;
+  --accent: #b76e79;
+  --accent-dim: #9a5a62;
+  --accent-soft: #d4848e;
+  --accent-warm: #a67c52;
+  --accent-on: #f7ede6;
+  --accent-hover: #c47d87;
+  --danger: #b54755;
+  --warn: #a67c52;
+  --select: #b76e7933;
+  --viewport: #efe4db;
+  --grid: #dcc4b6;
+  --axis: #b89688;
+  --brand-gradient: linear-gradient(
+    135deg,
+    #b76e79 0%,
+    #9a5a62 50%,
+    #a67c52 100%
+  );
+  --pulse-accent: 183, 110, 121;
 }
 
 * {
@@ -61,10 +110,10 @@ select {
 @keyframes pulse-play {
   0%,
   100% {
-    box-shadow: 0 0 0 0 rgba(61, 184, 168, 0.45);
+    box-shadow: 0 0 0 0 rgba(var(--pulse-accent), 0.45);
   }
   50% {
-    box-shadow: 0 0 0 6px rgba(61, 184, 168, 0);
+    box-shadow: 0 0 0 6px rgba(var(--pulse-accent), 0);
   }
 }
 
@@ -85,4 +134,23 @@ select {
 
 .panel-animate {
   animation: fade-in 0.25s ease-out;
+}
+
+.brand-mark {
+  background: var(--brand-gradient);
+  color: var(--accent-on);
+}
+
+body.cursor-col-resize,
+body.cursor-col-resize * {
+  cursor: col-resize !important;
+}
+
+body.cursor-row-resize,
+body.cursor-row-resize * {
+  cursor: row-resize !important;
+}
+
+body.select-none {
+  user-select: none;
 }

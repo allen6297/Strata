@@ -2,8 +2,11 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
+use strata_engine::{NullScriptHost, SceneFile, World, ENGINE_VERSION};
+use tauri::State;
 
 #[derive(Serialize)]
 struct RunResult {
@@ -22,6 +25,27 @@ struct ProjectFile {
   kind: String,
   size: u64,
   content: Option<String>,
+}
+
+pub struct EngineState {
+  world: Mutex<World>,
+  host: Mutex<NullScriptHost>,
+}
+
+impl Default for EngineState {
+  fn default() -> Self {
+    Self {
+      world: Mutex::new(World::new()),
+      host: Mutex::new(NullScriptHost),
+    }
+  }
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EngineInfo {
+  pub version: String,
+  pub script_host: String,
 }
 
 fn run_rosegold_file(path: &Path) -> Result<RunResult, String> {
@@ -274,18 +298,54 @@ fn data_encoding_base64(bytes: &[u8]) -> String {
   out
 }
 
+#[tauri::command]
+fn engine_info() -> EngineInfo {
+  EngineInfo {
+    version: ENGINE_VERSION.into(),
+    script_host: "null".into(),
+  }
+}
+
+#[tauri::command]
+fn engine_load_scene(scene: SceneFile, state: State<EngineState>) -> Result<SceneFile, String> {
+  let mut world = state.world.lock().map_err(|e| e.to_string())?;
+  let mut host = state.host.lock().map_err(|e| e.to_string())?;
+  *world = World::from_scene(scene);
+  world.load(&mut *host);
+  Ok(world.to_scene())
+}
+
+#[tauri::command]
+fn engine_snapshot(state: State<EngineState>) -> Result<SceneFile, String> {
+  let world = state.world.lock().map_err(|e| e.to_string())?;
+  Ok(world.to_scene())
+}
+
+#[tauri::command]
+fn engine_tick(dt: f32, state: State<EngineState>) -> Result<SceneFile, String> {
+  let mut world = state.world.lock().map_err(|e| e.to_string())?;
+  let mut host = state.host.lock().map_err(|e| e.to_string())?;
+  world.tick(dt, &mut *host);
+  Ok(world.to_scene())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
   tauri::Builder::default()
     .plugin(tauri_plugin_dialog::init())
     .plugin(tauri_plugin_fs::init())
+    .manage(EngineState::default())
     .invoke_handler(tauri::generate_handler![
       run_rosegold,
       run_rosegold_hooks,
       list_project_files,
       write_project_file,
       read_text_file,
-      read_file_base64
+      read_file_base64,
+      engine_info,
+      engine_load_scene,
+      engine_snapshot,
+      engine_tick
     ])
     .setup(|app| {
       if cfg!(debug_assertions) {

@@ -1,4 +1,5 @@
 import type { AssetItem, Entity, EntityKind } from '@/types/scene'
+import { entityDefaults } from '@/lib/scene'
 import { uid } from '@/lib/utils'
 import { isTauri } from '@/lib/tauri'
 
@@ -423,23 +424,20 @@ export function applyDirectives(
     }
     if (d.type === 'spawn') {
       const spec = d.spec
-      list.push({
-        id: uid('ent'),
-        name: spec.name,
-        kind: spec.kind,
-        parentId: null,
-        scriptId: resolveAssetId(assets, 'script', spec.scriptName),
-        textureId: resolveAssetId(assets, 'texture', spec.textureName),
-        audioId: null,
-        x: spec.x,
-        y: spec.y,
-        width: spec.width,
-        height: spec.height,
-        rotation: 0,
-        color: spec.color,
-        visible: true,
-        locked: false,
-      })
+      list.push(
+        entityDefaults({
+          id: uid('ent'),
+          name: spec.name,
+          kind: spec.kind,
+          scriptId: resolveAssetId(assets, 'script', spec.scriptName),
+          textureId: resolveAssetId(assets, 'texture', spec.textureName),
+          x: spec.x,
+          y: spec.y,
+          width: spec.width,
+          height: spec.height,
+          color: spec.color,
+        }),
+      )
       continue
     }
 

@@ -1,4 +1,15 @@
-export type EntityKind = 'sprite' | 'empty' | 'camera' | 'light'
+export type SceneMode = '2d' | '3d'
+
+export type EntityKind =
+  | 'sprite'
+  | 'empty'
+  | 'camera'
+  | 'light'
+  | 'mesh'
+  | 'script'
+
+export type MeshPrimitive = 'box' | 'plane'
+export type LightKind = 'point' | 'directional'
 
 export interface Entity {
   id: string
@@ -10,12 +21,23 @@ export interface Entity {
   audioId: string | null
   x: number
   y: number
+  z: number
   width: number
   height: number
+  depth: number
   rotation: number
+  rotationX: number
+  rotationY: number
+  rotationZ: number
+  scaleX: number
+  scaleY: number
+  scaleZ: number
   color: string
   visible: boolean
   locked: boolean
+  scriptPath: string
+  meshPrimitive: MeshPrimitive
+  lightKind: LightKind
 }
 
 export interface AssetItem {
@@ -38,12 +60,20 @@ export interface AssetItem {
 
 export type ToolMode = 'select' | 'move' | 'create'
 
+export interface CameraReadout {
+  x: number
+  y: number
+  z: number
+  zoom: number
+}
+
 export interface SceneDocument {
-  version: 1
+  version: 2
   name: string
+  mode: SceneMode
   entities: Entity[]
   scripts?: AssetItem[]
 }
 
-export const SCENE_STORAGE_KEY = 'strata.scene.v1'
+export const SCENE_STORAGE_KEY = 'strata.scene.v2'
 export const SCRIPTS_STORAGE_KEY = 'strata.scripts.v1'

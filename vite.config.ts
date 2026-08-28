@@ -13,6 +13,7 @@ export default defineConfig({
       '@': fileURLToPath(new URL('./src', import.meta.url)),
     },
   },
+  envPrefix: ['VITE_', 'TAURI_ENV_*'],
   server: {
     host: host || '0.0.0.0',
     port: 4521,
@@ -28,5 +29,4 @@ export default defineConfig({
       ignored: ['**/src-tauri/**'],
     },
   },
-  envPrefix: ['VITE_', 'TAURI_'],
 })

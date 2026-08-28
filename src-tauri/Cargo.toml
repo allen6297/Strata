@@ -1,7 +1,7 @@
 [package]
 name = "strata"
 version = "0.1.0"
-description = "Strata — 2D game engine scene editor"
+description = "Strata — 2D/3D game engine scene editor"
 authors = ["Kalob Allen"]
 license = "MIT"
 edition = "2021"
@@ -22,3 +22,4 @@ tauri = { version = "2.11.3" }
 tauri-plugin-log = "2"
 tauri-plugin-dialog = "2.7.2"
 tauri-plugin-fs = "2.5.1"
+strata-engine = { path = "../crates/strata-engine" }
