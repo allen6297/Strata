@@ -2,7 +2,7 @@
 
 A **2D/3D** custom engine with a React editor shell. Runtime lives in Rust (`crates/strata-engine`); the 2D viewport uses canvas with textures and gizmos; 3D mode uses Three.js as an **editor view only**. Desktop packaging is **Tauri 2**.
 
-Scripting language: [RoseGold](https://github.com/allen6297/RoseGold-PY). Play runs `on_ready` once, then ticks `on_update` while playing. Desktop uses real `rosegold`; the browser applies the same directives from script source as a preview.
+Scripting language: **RoseGold** (native Rust interpreter in `crates/rosegold`). Play runs `on_ready` once, then ticks `on_update` while playing. Desktop uses the real interpreter; the browser applies the same directives from script source as a preview.
 
 Local path: `/Users/kalob/Code/strata`.
 
@@ -30,42 +30,16 @@ Production bundle:
 npm run tauri:build
 ```
 
-## RoseGold setup (desktop scripting)
+## RoseGold scripting
 
-Strata is in the middle of porting its RoseGold interpreter from Python to Rust so the desktop app can eventually ship without a Python runtime.
-
-**Phase 1 status:** a native Rust interpreter lives in `crates/rosegold`. It handles the script hooks Strata uses (`fn on_ready`, `fn on_update`, `import str`, `print`, `if`, `while`, basic arithmetic, and `str.contains`). If the native interpreter hits an unsupported feature, it falls back to the vendored Python interpreter at `vendor/RoseGold-PY`.
-
-### Quick start (native interpreter is used automatically)
-
-If you only write Strata-style scripts, you don't need Python at all. Run the app as usual:
+Strata uses a custom Python-like language called **RoseGold**. The native interpreter is implemented in Rust in `crates/rosegold` and is used automatically by the desktop app. No Python runtime or extra setup is required.
 
 ```bash
 cd /Users/kalob/Code/Strata
 npm run tauri:dev
 ```
 
-### Fallback Python interpreter (optional)
-
-For scripts that use RoseGold features not yet ported to Rust, keep the Python fallback ready. Requires **Python 3.14+** (the system Python on macOS is usually too old):
-
-```bash
-# 1. Install Python 3.14+ (Homebrew example)
-brew install python@3.14
-# Or with pyenv: brew install pyenv && pyenv install 3.14-dev && pyenv global 3.14-dev
-
-# 2. Set up the vendored Python interpreter (creates venv, installs submodule if needed)
-cd /Users/kalob/Code/Strata
-npm run setup:rosegold
-```
-
-`npm run tauri:dev` runs `setup:rosegold` automatically before starting. You can verify the Python interpreter manually:
-
-```bash
-vendor/RoseGold-PY/.venv/bin/rosegold vendor/RoseGold-PY/examples/hello.rg
-```
-
-Browser preview (`npm run dev`) does not need the real interpreter.
+Browser preview (`npm run dev`) does not run scripts; it applies Strata directives from the source as a preview.
 
 ## Live Play
 

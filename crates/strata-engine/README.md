@@ -14,7 +14,7 @@ Custom 2D/3D runtime for Strata. The React editor is the authoring UI; this crat
 
 Play mode always calls `ScriptHost::on_load` / `on_update`. Today that is [`NullScriptHost`](src/script.rs) (no-op).
 
-A future **RoseGold** host ([RoseGold-PY](https://github.com/allen6297/RoseGold-PY)) should implement `ScriptHost` and attach `.rg` files from each entity’s `scriptPath`. No Python / bytecode VM is wired yet.
+A **RoseGold** host (the native `rosegold` interpreter in `crates/rosegold`) should implement `ScriptHost` and attach `.rg` files from each entity’s `scriptPath`. The Python fallback has been removed.
 
 ## Editor view
 

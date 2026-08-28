@@ -1,0 +1,205 @@
+{
+  "Function": {
+    "prefix": "fn",
+    "body": [
+      "fn ${1:name}(${2:args}): ${3:Void} {",
+      "\t$0",
+      "}"
+    ],
+    "description": "Function declaration"
+  },
+  "Main": {
+    "prefix": "main",
+    "body": [
+      "fn main(): ${1:Void} {",
+      "\t$0",
+      "}"
+    ],
+    "description": "Entry point fn main"
+  },
+  "Test": {
+    "prefix": "@test",
+    "body": [
+      "@test",
+      "fn ${1:test_name}() {",
+      "\t$0",
+      "}"
+    ],
+    "description": "@test function (rosegold test)"
+  },
+  "UFCS": {
+    "prefix": "@ufcs",
+    "body": [
+      "@ufcs(type: ${1:Float})",
+      "${2|pub ,|}fn ${3:name}(${4:x}: ${1}): ${5:Int} {",
+      "\t$0",
+      "}"
+    ],
+    "description": "@ufcs(type: T) free function"
+  },
+  "Deprecated": {
+    "prefix": "@deprecated",
+    "body": [
+      "@deprecated",
+      "$0"
+    ],
+    "description": "@deprecated marker"
+  },
+  "Decorator wrapper": {
+    "prefix": "decorator",
+    "body": [
+      "fn ${1:wrap}(inner: Fn): Fn {",
+      "\treturn fn() {",
+      "\t\t$0",
+      "\t\tinner();",
+      "\t};",
+      "}"
+    ],
+    "description": "Python-style decorator wrapper using Fn"
+  },
+  "F-string": {
+    "prefix": "f\"",
+    "body": [
+      "f\"${1:text {${2:expr}}}\"$0"
+    ],
+    "description": "f-string interpolation"
+  },
+  "Class": {
+    "prefix": "class",
+    "body": [
+      "pub class ${1:Name}(${2:params}) {",
+      "\tinit {",
+      "\t\t$0",
+      "\t}",
+      "}"
+    ],
+    "description": "Class with init"
+  },
+  "Struct": {
+    "prefix": "struct",
+    "body": [
+      "pub struct ${1:Name}(${2:params}) {",
+      "\t$0",
+      "}"
+    ],
+    "description": "Struct declaration"
+  },
+  "Enum": {
+    "prefix": "enum",
+    "body": [
+      "pub enum ${1:Name} {",
+      "\t${2:Case},",
+      "\t${3:Payload}(${4:x: Int}),",
+      "\t$0",
+      "}"
+    ],
+    "description": "ADT enum declaration"
+  },
+  "Trait": {
+    "prefix": "trait",
+    "body": [
+      "pub trait ${1:Name} {",
+      "\tfn ${2:method}(${3:args}): ${4:Void};",
+      "}"
+    ],
+    "description": "Trait declaration"
+  },
+  "Mod": {
+    "prefix": "mod",
+    "body": [
+      "pub mod ${1:name} {",
+      "\t$0",
+      "}"
+    ],
+    "description": "Module block"
+  },
+  "If": {
+    "prefix": "if",
+    "body": [
+      "if ${1:cond} {",
+      "\t$0",
+      "}"
+    ],
+    "description": "If statement"
+  },
+  "If Else": {
+    "prefix": "ife",
+    "body": [
+      "if ${1:cond} {",
+      "\t$2",
+      "} else {",
+      "\t$0",
+      "}"
+    ],
+    "description": "If / else"
+  },
+  "While": {
+    "prefix": "while",
+    "body": [
+      "while ${1:cond} {",
+      "\t$0",
+      "}"
+    ],
+    "description": "While loop"
+  },
+  "For": {
+    "prefix": "for",
+    "body": [
+      "for ${1:x} in ${2:0..n} {",
+      "\t$0",
+      "}"
+    ],
+    "description": "For-in loop"
+  },
+  "For inclusive": {
+    "prefix": "for=",
+    "body": [
+      "for ${1:x} in ${2:0..=n} {",
+      "\t$0",
+      "}"
+    ],
+    "description": "For-in inclusive range"
+  },
+  "Match": {
+    "prefix": "match",
+    "body": [
+      "match ${1:value} {",
+      "\t${2:pattern} {",
+      "\t\t$0",
+      "\t}",
+      "\t_ {",
+      "\t\tpass;",
+      "\t}",
+      "}"
+    ],
+    "description": "Match statement"
+  },
+  "Var": {
+    "prefix": "var",
+    "body": [
+      "var ${1:name}: ${2:Int} = ${3:0};"
+    ],
+    "description": "Variable binding"
+  },
+  "Const": {
+    "prefix": "const",
+    "body": [
+      "const ${1:name} = ${2:value};"
+    ],
+    "description": "Constant binding"
+  },
+  "Import": {
+    "prefix": "import",
+    "body": [
+      "import ${1:math};"
+    ],
+    "description": "Import module"
+  },
+  "From Import": {
+    "prefix": "from",
+    "body": [
+      "from ${1:math} import ${2:clamp};"
+    ],
+    "description": "From-import names"
+  }
+}

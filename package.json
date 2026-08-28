@@ -9,8 +9,6 @@
     "lint": "oxlint",
     "preview": "vite preview",
     "tauri": "tauri",
-    "setup:rosegold": "scripts/setup-rosegold.sh",
-    "pretauri:dev": "npm run setup:rosegold",
     "tauri:dev": "tauri dev",
     "tauri:build": "tauri build"
   },

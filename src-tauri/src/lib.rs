@@ -1,7 +1,6 @@
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 
@@ -60,29 +59,6 @@ fn unique_rosegold_dir(base: &str) -> Result<PathBuf, String> {
   Ok(dir)
 }
 
-fn rosegold_bin_path() -> Result<PathBuf, String> {
-  if let Some(env_path) = std::env::var_os("ROSEGOLD_PATH") {
-    return Ok(PathBuf::from(env_path));
-  }
-  if let Ok(exe) = std::env::current_exe() {
-    let mut dir = exe.parent().map(Path::to_path_buf);
-    while let Some(d) = dir.take() {
-      let candidate = d.join("vendor/RoseGold-PY/.venv/bin/rosegold");
-      if candidate.exists() {
-        return Ok(candidate);
-      }
-      dir = d.parent().map(Path::to_path_buf);
-    }
-  }
-  let cwd_candidate = std::env::current_dir()
-    .unwrap_or_default()
-    .join("vendor/RoseGold-PY/.venv/bin/rosegold");
-  if cwd_candidate.exists() {
-    return Ok(cwd_candidate);
-  }
-  Ok(PathBuf::from("rosegold"))
-}
-
 fn run_rosegold_native(source: &str) -> RunResult {
   let native = rosegold::run_source(source);
   RunResult {
@@ -95,46 +71,9 @@ fn run_rosegold_native(source: &str) -> RunResult {
 
 fn run_rosegold_file(path: &Path) -> Result<RunResult, String> {
   let source = fs::read_to_string(path).map_err(|e| e.to_string())?;
-  let native = run_rosegold_native(&source);
-  if native.ok {
-    return Ok(native);
-  }
-
-  // Fallback to the Python interpreter for features not yet ported to Rust.
-  let bin = rosegold_bin_path()?;
-  let output = Command::new(&bin).arg(path).output().map_err(|e| {
-    format!(
-      "Native RoseGold failed: {}. \
-Also failed to run Python fallback `{}` ({e}). Install RoseGold-PY and ensure `rosegold` is on PATH, \
-or set ROSEGOLD_PATH. See README.md > RoseGold setup for commands.",
-      native.stderr,
-      bin.display()
-    )
-  })?;
-
-  let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-  let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-  let ok = output.status.success();
-  let message = if ok {
-    "RoseGold finished".to_string()
-  } else {
-    format!(
-      "RoseGold exited with {}",
-      output
-        .status
-        .code()
-        .map(|c| c.to_string())
-        .unwrap_or_else(|| "signal".into())
-    )
-  };
-
-  Ok(RunResult {
-    ok,
-    stdout,
-    stderr,
-    message,
-  })
+  Ok(run_rosegold_native(&source))
 }
+
 
 #[tauri::command]
 fn run_rosegold(source: String) -> Result<RunResult, String> {

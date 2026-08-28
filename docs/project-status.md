@@ -21,7 +21,7 @@ The UI shell is mostly functional:
 - Native menu bridge for macOS app menus (`src/components/NativeMenuBridge.tsx`).
 - Scene hierarchy and inspector wired to the scene model.
 - 2D/3D viewport switcher, play mode, and runtime input handling.
-- Script editor with RoseGold syntax highlighting via the vendored VS Code extension (`vendor/RoseGold-PY/editors/vscode`).
+- Script editor with RoseGold syntax highlighting via the VS Code extension in `editors/vscode`.
 
 Known rough edges are mostly React-side linter warnings (refs accessed during render, set-state-in-effect, etc.) rather than hard blockers.
 
@@ -36,6 +36,7 @@ The interpreter is in `crates/rosegold`. It is a tree-walking interpreter with a
 | 1 | Minimal working interpreter: functions, variables, `if`/`while`/`for`, `print`, basic math, `str` stdlib, script hooks (`on_ready`, `on_update`) | Done |
 | 2 | F-strings, range expressions (`0..n`, `0..=n`), `math` stdlib, `checks` stdlib | Done |
 | 3 | **Runtime errors with line/col** + broader language coverage | Done |
+| 4.1 | Array mutation — `push`, `pop`, and in-place index assignment | Done |
 
 ### Phase 3 additions
 
@@ -56,23 +57,29 @@ The interpreter is in `crates/rosegold`. It is a tree-walking interpreter with a
 - **F-string format specs:** `f"pi≈{pi:.2f}"` → `pi≈3.14`.
 - Tests added for all of the above; full workspace `cargo test` passes.
 
+### Phase 4.1 additions
+
+- **`Value::Array` and `Value::Map` use shared mutability** (`Rc<RefCell<...>>`) so assignments and methods mutate the original value.
+- **`Array.push(value)`** and **`Array.pop()`** mutate in place.
+- **In-place index assignment** works for arrays and maps: `a[0] = 42; scores["key"] = value;`.
+- Tests added for shared-reference mutation; `cargo test -p rosegold` passes.
+
 ## 4. What is still missing / next steps
 
-The interpreter is getting close to feature parity with the Python version, but several pieces remain before the Python fallback can be removed.
+The interpreter is getting close to feature parity with the original Python version, but several language and engine pieces remain before it covers the full Strata script surface.
 
 ### 4.1 RoseGold language gaps
 
-1. **Array mutation** — `push`, `pop`, and in-place index assignment are still placeholders. Requires moving `Value` from pure `Clone` semantics to a reference-based model (e.g. `Rc<RefCell<Value>>` or interned handles) so methods can mutate the original array.
-2. **Real module import resolution** — `from module import Item;` and `import module;` are parsed, but they do not yet load `.rg` files from disk. The `Option` and `Result` modules are currently hard-coded in the interpreter.
-3. **Structs / classes / enums with custom definitions** — only built-in `Option` and `Result` exist; user-defined `struct`/`enum` types are not parsed.
-4. **Type checker** — type annotations are parsed and ignored at runtime. A static check phase is needed for safer scripts.
-5. **More stdlib parity** — `io` (file I/O), full `Array` module, and any remaining `str`/`math`/`checks` functions that the Python examples rely on.
-6. **Full example compatibility** — the Python examples under `vendor/RoseGold-PY/examples/` still exercise features the Rust interpreter does not yet support. Running them one by one is the best way to find the next gaps.
+1. **Real module import resolution** — `from module import Item;` and `import module;` are parsed, but they do not yet load `.rg` files from disk. The `Option` and `Result` modules are currently hard-coded in the interpreter.
+2. **Structs / classes / enums with custom definitions** — only built-in `Option` and `Result` exist; user-defined `struct`/`enum` types are not parsed.
+3. **Type checker** — type annotations are parsed and ignored at runtime. A static check phase is needed for safer scripts.
+4. **More stdlib parity** — `io` (file I/O), full `Array` module, and any remaining `str`/`math`/`checks` functions that the upstream Python examples rely on.
+5. **Full example compatibility** — the upstream RoseGold-PY examples still exercise features the Rust interpreter does not yet support. Running them one by one is the best way to find the next gaps.
 
 ### 4.2 Engine / editor next steps
 
 1. **Script host bridge** — the Rust engine currently uses a `NullScriptHost` stub. Wire `rosegold` into the engine so scripts can read/write scene state during `on_update`.
-2. **Remove Python fallback** — once the Rust interpreter runs the full Strata script surface and the Python examples pass, delete the vendored Python fallback and the editable install in `setup-rosegold.sh`.
+2. **Remove Python fallback** — done. The vendored Python fallback and `setup-rosegold.sh` have been removed; `crates/rosegold` is the only interpreter.
 3. **Browser preview parity** — the browser preview applies RoseGold directives without the real interpreter. Decide whether to keep it as a preview-only stub or compile the Rust interpreter to WASM.
 
 ## 5. Running tests
@@ -93,18 +100,12 @@ npx oxlint
 
 ## 6. How to decide the next phase
 
-The fastest way to extend the interpreter is to pick a RoseGold-PY example that currently fails and implement the missing feature:
-
-```bash
-vendor/RoseGold-PY/.venv/bin/rosegold vendor/RoseGold-PY/examples/tour/main.rg
-vendor/RoseGold-PY/.venv/bin/rosegold vendor/RoseGold-PY/examples/tests/main.rg
-vendor/RoseGold-PY/.venv/bin/rosegold vendor/RoseGold-PY/examples/map_result/main.rg
-```
+The fastest way to extend the interpreter is to pick an upstream RoseGold-PY example that currently fails and implement the missing feature. The examples can be cloned from `https://github.com/allen6297/RoseGold-PY` and run with the Python interpreter if you still have it installed; otherwise port the relevant script to `cargo test -p rosegold`.
 
 Alternatively, the next highest-impact items are:
 
-- **Array mutation** (unblocks many real scripts).
-- **File-based module imports** (unlocks the standard library files in `vendor/RoseGold-PY/rosegold/stdlib/`).
+- **File-based module imports** (unlocks real `.rg` standard library files).
 - **Struct/enum definitions** (unlocks user-defined data types).
+- **Script host bridge** (lets scripts read and write scene state during play).
 
-All code changes are currently uncommitted in the working tree.
+All recent changes are committed and pushed.
