@@ -1,4 +1,4 @@
-export type SceneMode = '2d' | '3d'
+export type SceneMode = '2d' | '3d' | 'script'
 
 export type EntityKind =
   | 'sprite'

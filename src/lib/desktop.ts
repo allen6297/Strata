@@ -1,5 +1,5 @@
 import { open, save } from '@tauri-apps/plugin-dialog'
-import { readTextFile, writeTextFile } from '@tauri-apps/plugin-fs'
+import { invoke } from '@tauri-apps/api/core'
 import { downloadScene, parseSceneDocument } from '@/lib/scene'
 import type { SceneDocument } from '@/types/scene'
 
@@ -36,7 +36,7 @@ export async function saveSceneFile(
     target = picked
   }
 
-  await writeTextFile(target, contents)
+  await invoke<void>('write_project_file', { path: target, contents })
   return target
 }
 
@@ -53,7 +53,7 @@ export async function openSceneFile(): Promise<{
   })
   if (!selected || Array.isArray(selected)) return null
 
-  const text = await readTextFile(selected)
+  const text = await invoke<string>('read_text_file', { path: selected })
   const doc = parseSceneDocument(JSON.parse(text) as unknown)
   return { doc, path: selected }
 }

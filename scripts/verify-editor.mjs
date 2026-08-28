@@ -16,6 +16,20 @@ async function main() {
   await page.waitForTimeout(100)
   const scriptVisible = await page.getByTestId('asset-scr_player').isVisible()
 
+  // Mode tab: switch to Script mode
+  await page.getByTestId('mode-script').click()
+  await page.waitForTimeout(100)
+  const scriptModeActive = await page.getByTestId('mode-script').evaluate((el) =>
+    el.className.includes('text-[var(--accent)]'),
+  )
+
+  // Selecting a script asset keeps Script mode
+  await page.getByTestId('asset-scr_player').click()
+  await page.waitForTimeout(100)
+  const stillScriptMode = await page.getByTestId('mode-script').evaluate((el) =>
+    el.className.includes('text-[var(--accent)]'),
+  )
+
   // Navigate into textures folder (built-in relative paths)
   await page.getByTestId('asset-filter-all').click()
   const texturesFolder = page.getByTestId('asset-folder-textures')
@@ -29,8 +43,8 @@ async function main() {
     fullPage: true,
   })
 
-  const ok = playerVisible && scriptVisible
-  console.log({ playerVisible, scriptVisible, ok })
+  const ok = playerVisible && scriptVisible && scriptModeActive && stillScriptMode
+  console.log({ playerVisible, scriptVisible, scriptModeActive, stillScriptMode, ok })
   await browser.close()
   process.exit(ok ? 0 : 1)
 }

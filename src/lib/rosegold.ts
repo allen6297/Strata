@@ -3,20 +3,22 @@ import { entityDefaults } from '@/lib/scene'
 import { uid } from '@/lib/utils'
 import { isTauri } from '@/lib/tauri'
 
-export const DEFAULT_PLAYER_SCRIPT = `fn on_ready(name: Str, x: Float, y: Float): Int {
+export const DEFAULT_PLAYER_SCRIPT = `import str;
+
+fn on_ready(name: String, x: Float, y: Float): Int {
     print("[ready]");
     print("strata:play_sound name=jump.wav");
     return 0;
 }
 
-fn on_update(name: Str, x: Float, y: Float, dt: Float, keys: Str): Int {
-    if keys.contains("ArrowRight") || keys.contains("KeyD") {
+fn on_update(name: String, x: Float, y: Float, dt: Float, keys: String): Int {
+    if str.contains(keys, "ArrowRight") || str.contains(keys, "KeyD") {
         print("strata:move dx=3 dy=0");
     }
-    if keys.contains("ArrowLeft") || keys.contains("KeyA") {
+    if str.contains(keys, "ArrowLeft") || str.contains(keys, "KeyA") {
         print("strata:move dx=-3 dy=0");
     }
-    if keys.contains("Space") {
+    if str.contains(keys, "Space") {
         print("strata:play_sound name=jump.wav");
     }
     return 0;
@@ -27,13 +29,13 @@ fn main(): Int {
 }
 `
 
-export const DEFAULT_COIN_SCRIPT = `fn on_ready(name: Str, x: Float, y: Float): Int {
+export const DEFAULT_COIN_SCRIPT = `fn on_ready(name: String, x: Float, y: Float): Int {
     print("[ready] coin");
     print(name);
     return 0;
 }
 
-fn on_update(name: Str, x: Float, y: Float, dt: Float): Int {
+fn on_update(name: String, x: Float, y: Float, dt: Float): Int {
     print("strata:rot 8");
     return 0;
 }
@@ -339,7 +341,7 @@ export function previewUpdateDirectives(
       let gated = false
       let allowed = true
       for (let j = i; j >= Math.max(0, i - 4); j--) {
-        const keyMatch = lines[j].match(/keys\.contains\("([^"]+)"\)/)
+        const keyMatch = lines[j].match(/str\.contains\(keys,\s*"([^"]+)"\)/)
         if (keyMatch) {
           gated = true
           allowed = keys.includes(keyMatch[1])
@@ -354,7 +356,7 @@ export function previewUpdateDirectives(
       continue
     }
 
-    if (!script.content.includes('keys.contains')) {
+    if (!script.content.includes('str.contains(keys,')) {
       const embedded = [...script.content.matchAll(/strata:[^"'\n]+/g)].map(
         (m) => m[0],
       )

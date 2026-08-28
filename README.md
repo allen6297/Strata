@@ -30,6 +30,43 @@ Production bundle:
 npm run tauri:build
 ```
 
+## RoseGold setup (desktop scripting)
+
+Strata is in the middle of porting its RoseGold interpreter from Python to Rust so the desktop app can eventually ship without a Python runtime.
+
+**Phase 1 status:** a native Rust interpreter lives in `crates/rosegold`. It handles the script hooks Strata uses (`fn on_ready`, `fn on_update`, `import str`, `print`, `if`, `while`, basic arithmetic, and `str.contains`). If the native interpreter hits an unsupported feature, it falls back to the vendored Python interpreter at `vendor/RoseGold-PY`.
+
+### Quick start (native interpreter is used automatically)
+
+If you only write Strata-style scripts, you don't need Python at all. Run the app as usual:
+
+```bash
+cd /Users/kalob/Code/Strata
+npm run tauri:dev
+```
+
+### Fallback Python interpreter (optional)
+
+For scripts that use RoseGold features not yet ported to Rust, keep the Python fallback ready. Requires **Python 3.14+** (the system Python on macOS is usually too old):
+
+```bash
+# 1. Install Python 3.14+ (Homebrew example)
+brew install python@3.14
+# Or with pyenv: brew install pyenv && pyenv install 3.14-dev && pyenv global 3.14-dev
+
+# 2. Set up the vendored Python interpreter (creates venv, installs submodule if needed)
+cd /Users/kalob/Code/Strata
+npm run setup:rosegold
+```
+
+`npm run tauri:dev` runs `setup:rosegold` automatically before starting. You can verify the Python interpreter manually:
+
+```bash
+vendor/RoseGold-PY/.venv/bin/rosegold vendor/RoseGold-PY/examples/hello.rg
+```
+
+Browser preview (`npm run dev`) does not need the real interpreter.
+
 ## Live Play
 
 On **Play**, Strata runs `on_ready` once, then ticks `on_update` while playing. The 2D viewport follows **Main Camera**, hides editor gizmos, and restores your edit camera when you stop. In Tauri, the Rust engine also loads the scene and ticks a `NullScriptHost` stub.
@@ -39,8 +76,10 @@ On **Play**, Strata runs `on_ready` once, then ticks `on_update` while playing. 
 Add a fifth `keys` parameter to `on_update` to read held keys (comma-separated codes):
 
 ```rg
-fn on_update(name: Str, x: Float, y: Float, dt: Float, keys: Str): Int {
-    if keys.contains("ArrowRight") { print("strata:move dx=3 dy=0"); }
+import str;
+
+fn on_update(name: String, x: Float, y: Float, dt: Float, keys: String): Int {
+    if str.contains(keys, "ArrowRight") { print("strata:move dx=3 dy=0"); }
     return 0;
 }
 ```
@@ -73,8 +112,13 @@ print("strata:get");
 
 ## Scene modes
 
+Switch modes from the floating tab over the viewport, **Scene** menu, or keys **1** / **2** / **3**.
+
 - **2D** — canvas viewport with snap, textures, parenting, and RoseGold play
 - **3D** — Three.js editor adapter with orbit camera, mesh/light entities, and euler transforms
+- **Script** — full-viewport RoseGold editor; select or double-click a `.rg` asset in the explorer to open it
+
+The dock layout is customizable: drag panel headers or tabs to rearrange zones. While dragging, edge drop targets appear so you can dock into collapsed columns. Close a panel with **×** on its header/tab, or toggle **View → Hierarchy / Inspector / Assets**. **View → Reset Layout** restores the default.
 
 Scenes are JSON `.scene` v2 (`mode` + 3D fields); v1 files migrate on open. Scenes are mirrored to `localStorage`; desktop **Save** / **Open** use native file dialogs.
 
@@ -100,6 +144,7 @@ Assign a texture in the Inspector, or **double-click** a texture asset. Sample i
 
 | Key | Action |
 |-----|--------|
+| `1` / `2` / `3` | 2D / 3D / Script mode |
 | `V` / `H` | Select / Pan (2D) or orbit (3D) |
 | `G` | Toggle snap (2D) |
 | `Space` | Play / Stop |

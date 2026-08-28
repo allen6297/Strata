@@ -154,3 +154,12 @@ body.cursor-row-resize * {
 body.select-none {
   user-select: none;
 }
+
+body.dock-dragging,
+body.dock-dragging * {
+  cursor: grabbing !important;
+}
+
+.dock-tab {
+  touch-action: none;
+}

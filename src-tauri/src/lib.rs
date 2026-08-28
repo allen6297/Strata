@@ -2,11 +2,14 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
 use strata_engine::{NullScriptHost, SceneFile, World, ENGINE_VERSION};
 use tauri::State;
+
+mod menu;
 
 #[derive(Serialize)]
 struct RunResult {
@@ -48,10 +51,64 @@ pub struct EngineInfo {
   pub script_host: String,
 }
 
+static ROSEGOLD_RUN_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+fn unique_rosegold_dir(base: &str) -> Result<PathBuf, String> {
+  let n = ROSEGOLD_RUN_COUNTER.fetch_add(1, Ordering::Relaxed);
+  let dir = std::env::temp_dir().join(format!("{base}-{n}"));
+  fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+  Ok(dir)
+}
+
+fn rosegold_bin_path() -> Result<PathBuf, String> {
+  if let Some(env_path) = std::env::var_os("ROSEGOLD_PATH") {
+    return Ok(PathBuf::from(env_path));
+  }
+  if let Ok(exe) = std::env::current_exe() {
+    let mut dir = exe.parent().map(Path::to_path_buf);
+    while let Some(d) = dir.take() {
+      let candidate = d.join("vendor/RoseGold-PY/.venv/bin/rosegold");
+      if candidate.exists() {
+        return Ok(candidate);
+      }
+      dir = d.parent().map(Path::to_path_buf);
+    }
+  }
+  let cwd_candidate = std::env::current_dir()
+    .unwrap_or_default()
+    .join("vendor/RoseGold-PY/.venv/bin/rosegold");
+  if cwd_candidate.exists() {
+    return Ok(cwd_candidate);
+  }
+  Ok(PathBuf::from("rosegold"))
+}
+
+fn run_rosegold_native(source: &str) -> RunResult {
+  let native = rosegold::run_source(source);
+  RunResult {
+    ok: native.ok,
+    stdout: native.stdout,
+    stderr: native.stderr,
+    message: native.message,
+  }
+}
+
 fn run_rosegold_file(path: &Path) -> Result<RunResult, String> {
-  let output = Command::new("rosegold").arg(path).output().map_err(|e| {
+  let source = fs::read_to_string(path).map_err(|e| e.to_string())?;
+  let native = run_rosegold_native(&source);
+  if native.ok {
+    return Ok(native);
+  }
+
+  // Fallback to the Python interpreter for features not yet ported to Rust.
+  let bin = rosegold_bin_path()?;
+  let output = Command::new(&bin).arg(path).output().map_err(|e| {
     format!(
-      "Failed to run `rosegold` ({e}). Install RoseGold-PY and ensure `rosegold` is on PATH."
+      "Native RoseGold failed: {}. \
+Also failed to run Python fallback `{}` ({e}). Install RoseGold-PY and ensure `rosegold` is on PATH, \
+or set ROSEGOLD_PATH. See README.md > RoseGold setup for commands.",
+      native.stderr,
+      bin.display()
     )
   })?;
 
@@ -81,8 +138,7 @@ fn run_rosegold_file(path: &Path) -> Result<RunResult, String> {
 
 #[tauri::command]
 fn run_rosegold(source: String) -> Result<RunResult, String> {
-  let dir = std::env::temp_dir().join("strata-rosegold");
-  fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+  let dir = unique_rosegold_dir("strata-rosegold")?;
   let path = dir.join("play.rg");
   {
     let mut file = fs::File::create(&path).map_err(|e| e.to_string())?;
@@ -102,14 +158,12 @@ struct HookJob {
 
 #[tauri::command]
 fn run_rosegold_hooks(jobs: Vec<HookJob>) -> Result<RunResult, String> {
-  let dir = std::env::temp_dir().join("strata-rosegold-hooks");
-  fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-
   let mut all_out = String::new();
   let mut all_err = String::new();
   let mut ok = true;
 
   for (i, job) in jobs.iter().enumerate() {
+    let dir = unique_rosegold_dir("strata-rosegold-hook")?;
     let path = dir.join(format!("hook_{i}.rg"));
     fs::write(&path, &job.source).map_err(|e| e.to_string())?;
     let result = run_rosegold_file(&path)?;
@@ -333,7 +387,6 @@ fn engine_tick(dt: f32, state: State<EngineState>) -> Result<SceneFile, String> 
 pub fn run() {
   tauri::Builder::default()
     .plugin(tauri_plugin_dialog::init())
-    .plugin(tauri_plugin_fs::init())
     .manage(EngineState::default())
     .invoke_handler(tauri::generate_handler![
       run_rosegold,
@@ -355,6 +408,7 @@ pub fn run() {
             .build(),
         )?;
       }
+      menu::install(app)?;
       Ok(())
     })
     .run(tauri::generate_context!())

@@ -454,7 +454,14 @@ export function parseSceneDocument(data: unknown): SceneDocument {
       typeof doc.name === 'string' && doc.name.trim()
         ? doc.name
         : DEFAULT_SCENE_NAME,
-    mode: doc.version === 1 ? '2d' : doc.mode === '3d' ? '3d' : '2d',
+    mode:
+      doc.version === 1
+        ? '2d'
+        : doc.mode === '3d'
+          ? '3d'
+          : doc.mode === 'script'
+            ? 'script'
+            : '2d',
     entities,
     scripts,
   }

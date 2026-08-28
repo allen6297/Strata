@@ -1,4 +1,6 @@
 import { Button } from '@/components/ui/button'
+import { DockDragHandle } from '@/components/DockDragHandle'
+import { DockPanelClose } from '@/components/DockPanelClose'
 import { Input } from '@/components/ui/input'
 import {
   assetsInFolder,
@@ -6,12 +8,14 @@ import {
   listChildFolders,
   parentDir,
 } from '@/lib/project'
+import type { DockZoneId } from '@/lib/dock-layout'
 import { cn } from '@/lib/utils'
 import type { AssetItem } from '@/types/scene'
 import {
   ChevronRight,
   FileAudio,
   FileCode2,
+  FilePlus,
   Folder,
   FolderOpen,
   Image,
@@ -34,6 +38,9 @@ interface AssetExplorerProps {
   onActivate?: (asset: AssetItem) => void
   onRefresh?: () => void
   onOpenProject?: () => void
+  onCreateScript?: () => void
+  chromeless?: boolean
+  dockZone?: DockZoneId
 }
 
 const icons = {
@@ -65,6 +72,9 @@ export function AssetExplorer({
   onActivate,
   onRefresh,
   onOpenProject,
+  onCreateScript,
+  chromeless = false,
+  dockZone,
 }: AssetExplorerProps) {
   const [cwd, setCwd] = useState('')
   const [query, setQuery] = useState('')
@@ -122,6 +132,11 @@ export function AssetExplorer({
     return c
   }, [assets])
 
+  const selectedAsset = useMemo(
+    () => assets.find((a) => a.id === selectedId) ?? null,
+    [assets, selectedId],
+  )
+
   const activateIndex = (index: number) => {
     const entry = entries[index]
     if (!entry) return
@@ -141,7 +156,7 @@ export function AssetExplorer({
 
   return (
     <section
-      className="panel-animate flex h-56 shrink-0 flex-col border-t border-[var(--border)] bg-[var(--bg-panel)]"
+      className="panel-animate flex h-full min-h-0 flex-col bg-[var(--bg-panel)]"
       data-testid="asset-explorer"
       onKeyDown={(e) => {
         if (e.target instanceof HTMLInputElement) return
@@ -161,6 +176,9 @@ export function AssetExplorer({
           e.preventDefault()
           setQuery('')
           setFilter('all')
+        } else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'f') {
+          e.preventDefault()
+          searchRef.current?.focus()
         } else if (e.key === '/' && !(e.metaKey || e.ctrlKey)) {
           e.preventDefault()
           searchRef.current?.focus()
@@ -169,10 +187,15 @@ export function AssetExplorer({
       tabIndex={0}
     >
       <div className="flex h-8 items-center gap-2 border-b border-[var(--border)] px-2">
-        <FolderOpen className="h-3.5 w-3.5 shrink-0 text-[var(--accent)]" />
-        <h2 className="shrink-0 text-[11px] font-semibold uppercase tracking-wider text-[var(--text-muted)]">
-          Assets
-        </h2>
+        {dockZone && <DockDragHandle panelId="assets" zone={dockZone} />}
+        {!chromeless && (
+          <>
+            <FolderOpen className="h-3.5 w-3.5 shrink-0 text-[var(--accent)]" />
+            <h2 className="shrink-0 text-[11px] font-semibold uppercase tracking-wider text-[var(--text-muted)]">
+              Assets
+            </h2>
+          </>
+        )}
         <div className="relative min-w-0 flex-1 max-w-xs">
           <Search className="pointer-events-none absolute left-2 top-1/2 h-3 w-3 -translate-y-1/2 text-[var(--text-muted)]" />
           <Input
@@ -220,6 +243,17 @@ export function AssetExplorer({
         </Button>
         <Button
           variant="toolbar"
+          size="sm"
+          title="New script asset"
+          data-testid="asset-new-script"
+          disabled={!onCreateScript}
+          onClick={() => onCreateScript?.()}
+        >
+          <FilePlus className="h-3.5 w-3.5" />
+          <span className="hidden sm:inline">New .rg</span>
+        </Button>
+        <Button
+          variant="toolbar"
           size="icon"
           title="Refresh project"
           data-testid="asset-refresh"
@@ -228,6 +262,7 @@ export function AssetExplorer({
         >
           <RefreshCw className={cn('h-3.5 w-3.5', loading && 'animate-spin')} />
         </Button>
+        {dockZone && <DockPanelClose panelId="assets" />}
       </div>
 
       <div className="flex h-7 items-center gap-1 border-b border-[var(--border)] px-2 text-[11px]">
@@ -269,8 +304,9 @@ export function AssetExplorer({
         </div>
       )}
 
-      <div className="min-h-0 flex-1 overflow-auto p-2">
-        {loading && assets.length === 0 ? (
+      <div className="flex min-h-0 flex-1 flex-col">
+        <div className="min-h-0 flex-1 overflow-auto p-2">
+          {loading && assets.length === 0 ? (
           <p className="px-2 py-8 text-center text-xs text-[var(--text-muted)]">
             Scanning project folder…
           </p>
@@ -377,6 +413,10 @@ export function AssetExplorer({
           </div>
         )}
       </div>
+      {selectedAsset && (
+        <AssetDetailPanel asset={selectedAsset} onActivate={onActivate} />
+      )}
+      </div>
     </section>
   )
 }
@@ -475,6 +515,90 @@ function AssetRow({
       </span>
       <span className="font-mono text-[10px] opacity-70">{asset.size}</span>
     </button>
+  )
+}
+
+function AssetDetailPanel({
+  asset,
+  onActivate,
+}: {
+  asset: AssetItem
+  onActivate?: (asset: AssetItem) => void
+}) {
+  const Icon = icons[asset.type]
+  const previewLines = asset.content?.split('\n').slice(0, 8).join('\n') ?? ''
+  const [imgError, setImgError] = useState(false)
+
+  return (
+    <div className="shrink-0 border-t border-[var(--border)] bg-[var(--bg-panel)]">
+      <div className="flex h-7 items-center gap-2 border-b border-[var(--border)] px-2">
+        <Icon className="h-3.5 w-3.5 text-[var(--accent)]" />
+        <span className="min-w-0 flex-1 truncate text-[11px] font-medium text-[var(--text)]">
+          {asset.name}
+        </span>
+        <span className="rounded bg-[var(--bg-panel-raised)] px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-wide text-[var(--text-muted)]">
+          {asset.type}
+        </span>
+        <span className="font-mono text-[10px] text-[var(--text-muted)]">
+          {asset.size}
+        </span>
+      </div>
+      <div className="max-h-28 overflow-auto p-2">
+        {asset.type === 'texture' && asset.url && !imgError ? (
+          <div className="flex items-center gap-3">
+            <img
+              src={asset.url}
+              alt=""
+              className="h-20 w-20 rounded border border-[var(--border)] object-contain bg-[var(--bg-input)]"
+              onError={() => setImgError(true)}
+            />
+            <div className="flex flex-col gap-0.5 text-[10px] text-[var(--text-muted)]">
+              <span>{asset.relativePath ?? asset.name}</span>
+              {onActivate && (
+                <button
+                  type="button"
+                  onClick={() => onActivate(asset)}
+                  className="text-left text-[var(--accent)] hover:underline"
+                >
+                  Double-click or click here to assign
+                </button>
+              )}
+            </div>
+          </div>
+        ) : asset.type === 'script' ? (
+          <div className="flex flex-col gap-1">
+            <pre className="overflow-hidden rounded bg-[var(--bg-input)] p-2 font-mono text-[10px] leading-relaxed text-[var(--text-muted)]">
+              {previewLines || (
+                <span className="italic opacity-60">Empty script</span>
+              )}
+            </pre>
+            {onActivate && (
+              <button
+                type="button"
+                onClick={() => onActivate(asset)}
+                className="self-start text-[10px] text-[var(--accent)] hover:underline"
+              >
+                Open in script editor
+              </button>
+            )}
+          </div>
+        ) : asset.type === 'audio' ? (
+          <div className="text-[10px] text-[var(--text-muted)]">
+            <span className="font-mono">{asset.relativePath ?? asset.name}</span>
+            <p className="mt-1 opacity-60">Audio preview is not yet available.</p>
+          </div>
+        ) : asset.type === 'scene' ? (
+          <div className="text-[10px] text-[var(--text-muted)]">
+            <span className="font-mono">{asset.relativePath ?? asset.name}</span>
+            <p className="mt-1 opacity-60">Double-click to load this scene.</p>
+          </div>
+        ) : (
+          <div className="text-[10px] text-[var(--text-muted)]">
+            {asset.relativePath ?? asset.name}
+          </div>
+        )}
+      </div>
+    </div>
   )
 }
 

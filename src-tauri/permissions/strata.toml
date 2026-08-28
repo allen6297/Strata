@@ -1,0 +1,49 @@
+[[permission]]
+identifier = "allow-run-rosegold"
+description = "Run RoseGold script source in a temp file."
+commands.allow = ["run_rosegold"]
+
+[[permission]]
+identifier = "allow-run-rosegold-hooks"
+description = "Run RoseGold on_ready/on_update hook jobs."
+commands.allow = ["run_rosegold_hooks"]
+
+[[permission]]
+identifier = "allow-list-project-files"
+description = "Scan a project directory for assets and scripts."
+commands.allow = ["list_project_files"]
+
+[[permission]]
+identifier = "allow-write-project-file"
+description = "Write a text file into the open project folder."
+commands.allow = ["write_project_file"]
+
+[[permission]]
+identifier = "allow-read-text-file"
+description = "Read a text file from disk."
+commands.allow = ["read_text_file"]
+
+[[permission]]
+identifier = "allow-read-file-base64"
+description = "Read a binary file and return base64."
+commands.allow = ["read_file_base64"]
+
+[[permission]]
+identifier = "allow-engine-info"
+description = "Query strata-engine version and script host."
+commands.allow = ["engine_info"]
+
+[[permission]]
+identifier = "allow-engine-load-scene"
+description = "Load a scene into the Rust engine."
+commands.allow = ["engine_load_scene"]
+
+[[permission]]
+identifier = "allow-engine-snapshot"
+description = "Snapshot the Rust engine scene state."
+commands.allow = ["engine_snapshot"]
+
+[[permission]]
+identifier = "allow-engine-tick"
+description = "Tick the Rust engine simulation."
+commands.allow = ["engine_tick"]

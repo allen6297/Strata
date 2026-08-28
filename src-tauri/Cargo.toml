@@ -5,21 +5,22 @@ description = "Strata — 2D/3D game engine scene editor"
 authors = ["Kalob Allen"]
 license = "MIT"
 edition = "2021"
-rust-version = "1.77.2"
+rust-version = "1.88.0"
 
 [lib]
 name = "strata_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
-tauri-build = { version = "2.6.3" }
+tauri-build = { version = "2.6.3", features = [] }
 
 [dependencies]
 serde_json = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 log = "0.4"
-tauri = { version = "2.11.3" }
+tauri = { version = "2.11.3", features = [] }
 tauri-plugin-log = "2"
 tauri-plugin-dialog = "2.7.2"
 tauri-plugin-fs = "2.5.1"
 strata-engine = { path = "../crates/strata-engine" }
+rosegold = { path = "../crates/rosegold" }

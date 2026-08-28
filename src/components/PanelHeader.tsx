@@ -1,4 +1,7 @@
 import type { ReactNode } from 'react'
+import { DockDragHandle } from '@/components/DockDragHandle'
+import { DockPanelClose } from '@/components/DockPanelClose'
+import type { DockZoneId, PanelId } from '@/lib/dock-layout'
 import { cn } from '@/lib/utils'
 
 interface PanelHeaderProps {
@@ -6,6 +9,8 @@ interface PanelHeaderProps {
   meta?: ReactNode
   actions?: ReactNode
   className?: string
+  dockPanel?: PanelId
+  dockZone?: DockZoneId
 }
 
 export function PanelHeader({
@@ -13,6 +18,8 @@ export function PanelHeader({
   meta,
   actions,
   className,
+  dockPanel,
+  dockZone,
 }: PanelHeaderProps) {
   return (
     <div
@@ -21,6 +28,9 @@ export function PanelHeader({
         className,
       )}
     >
+      {dockPanel && dockZone && (
+        <DockDragHandle panelId={dockPanel} zone={dockZone} />
+      )}
       <h2 className="text-[10px] font-semibold uppercase tracking-[0.08em] text-[var(--text-muted)]">
         {title}
       </h2>
@@ -31,6 +41,7 @@ export function PanelHeader({
           </span>
         )}
         {actions}
+        {dockPanel && <DockPanelClose panelId={dockPanel} />}
       </div>
     </div>
   )

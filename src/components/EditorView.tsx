@@ -436,7 +436,7 @@ export function EditorView({
   return (
     <div
       ref={wrapRef}
-      className="relative min-h-0 min-w-0 flex-1 bg-[var(--viewport)]"
+      className="relative h-full min-h-0 w-full bg-[var(--viewport)]"
     >
       <div
         className="pointer-events-none absolute left-2.5 top-2.5 rounded border border-[var(--border)] bg-[rgba(20,12,14,0.78)] px-2.5 py-1.5 font-mono text-[10px] leading-relaxed text-[var(--text-muted)]"

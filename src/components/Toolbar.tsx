@@ -50,6 +50,7 @@ interface ToolbarProps {
   onAddMesh: () => void
   onAddLight: () => void
   onAddScript: () => void
+  onCreateScriptAsset: () => void
   onDelete: () => void
   onDuplicate: () => void
   onUndo: () => void
@@ -97,6 +98,7 @@ export function Toolbar({
   onAddMesh,
   onAddLight,
   onAddScript,
+  onCreateScriptAsset,
   onDelete,
   onDuplicate,
   onUndo,
@@ -107,6 +109,8 @@ export function Toolbar({
   onSaveProject,
   onThemeToggle,
 }: ToolbarProps) {
+  const editingScript = mode === 'script'
+
   return (
     <header className="flex h-10 shrink-0 items-center gap-1 border-b border-[var(--border)] bg-[var(--bg-panel)] px-2 sm:gap-1.5 sm:px-2.5">
       <div className="flex items-center gap-2 border-r border-[var(--border)] pr-2.5">
@@ -121,40 +125,44 @@ export function Toolbar({
         </div>
       </div>
 
-      <Group>
-        <Button
-          variant="toolbar"
-          size="icon"
-          active={tool === 'select'}
-          title="Select (V)"
-          onClick={() => onToolChange('select')}
-        >
-          <MousePointer2 className="h-3.5 w-3.5" />
-        </Button>
-        <Button
-          variant="toolbar"
-          size="icon"
-          active={tool === 'move'}
-          title={mode === '3d' ? 'Orbit (H)' : 'Pan (H)'}
-          onClick={() => onToolChange('move')}
-        >
-          <Hand className="h-3.5 w-3.5" />
-        </Button>
-        {mode === '2d' && (
-          <Button
-            variant="toolbar"
-            size="icon"
-            active={snap}
-            title="Snap to grid (G) — hold Shift to bypass"
-            data-testid="snap-toggle"
-            onClick={onSnapToggle}
-          >
-            <Magnet className="h-3.5 w-3.5" />
-          </Button>
-        )}
-      </Group>
+      {!editingScript && (
+        <>
+          <Group>
+            <Button
+              variant="toolbar"
+              size="icon"
+              active={tool === 'select'}
+              title="Select (V)"
+              onClick={() => onToolChange('select')}
+            >
+              <MousePointer2 className="h-3.5 w-3.5" />
+            </Button>
+            <Button
+              variant="toolbar"
+              size="icon"
+              active={tool === 'move'}
+              title={mode === '3d' ? 'Orbit (H)' : 'Pan (H)'}
+              onClick={() => onToolChange('move')}
+            >
+              <Hand className="h-3.5 w-3.5" />
+            </Button>
+            {mode === '2d' && (
+              <Button
+                variant="toolbar"
+                size="icon"
+                active={snap}
+                title="Snap to grid (G) — hold Shift to bypass"
+                data-testid="snap-toggle"
+                onClick={onSnapToggle}
+              >
+                <Magnet className="h-3.5 w-3.5" />
+              </Button>
+            )}
+          </Group>
 
-      <Sep />
+          <Sep />
+        </>
+      )}
 
       <Group>
         <Button
@@ -181,103 +189,120 @@ export function Toolbar({
 
       <Sep />
 
-      <Group>
-        <Button
-          variant="ghost"
-          size="sm"
-          data-testid="add-sprite"
-          onClick={onAddSprite}
-          title="Add Sprite"
-          className="px-1.5"
-        >
-          <Plus className="h-3 w-3" />
-          <Square className="h-3 w-3" />
-          <span className="hidden sm:inline">Sprite</span>
-        </Button>
-        <Button
-          variant="ghost"
-          size="sm"
-          data-testid="add-empty"
-          onClick={onAddEmpty}
-          title="Add Empty"
-          className="px-1.5"
-        >
-          <Plus className="h-3 w-3" />
-          <Circle className="h-3 w-3" />
-          <span className="hidden sm:inline">Empty</span>
-        </Button>
-        <Button
-          variant="ghost"
-          size="sm"
-          data-testid="add-camera"
-          onClick={onAddCamera}
-          title="Add Camera"
-          className="px-1.5"
-        >
-          <Plus className="h-3 w-3" />
-          <Camera className="h-3 w-3" />
-          <span className="hidden sm:inline">Camera</span>
-        </Button>
-        {mode === '3d' && (
-          <>
-            <Button
-              variant="ghost"
-              size="sm"
-              data-testid="add-mesh"
-              onClick={onAddMesh}
-              title="Add Mesh"
-              className="px-1.5"
-            >
-              <Plus className="h-3 w-3" />
-              <Box className="h-3 w-3" />
-              <span className="hidden sm:inline">Mesh</span>
-            </Button>
-            <Button
-              variant="ghost"
-              size="sm"
-              data-testid="add-light"
-              onClick={onAddLight}
-              title="Add Light"
-              className="px-1.5"
-            >
-              <Plus className="h-3 w-3" />
-              <Lightbulb className="h-3 w-3" />
-              <span className="hidden sm:inline">Light</span>
-            </Button>
-          </>
-        )}
-        <Button
-          variant="ghost"
-          size="sm"
-          data-testid="add-script"
-          onClick={onAddScript}
-          title="Add Script entity"
-          className="px-1.5"
-        >
-          <Plus className="h-3 w-3" />
-          <FileCode2 className="h-3 w-3" />
-          <span className="hidden sm:inline">Script</span>
-        </Button>
-        <Button
-          variant="toolbar"
-          size="icon"
-          disabled={!canDuplicate}
-          onClick={onDuplicate}
-          title="Duplicate (Ctrl+D)"
-          data-testid="duplicate"
-        >
-          <Copy className="h-3.5 w-3.5" />
-        </Button>
-        <Button
-          variant="danger"
-          size="icon"
-          disabled={!canDelete}
-          onClick={onDelete}
-          title="Delete (Del)"
-        >
-          <Trash2 className="h-3.5 w-3.5" />
-        </Button>
-      </Group>
+      {editingScript ? (
+        <Group>
+          <Button
+            variant="ghost"
+            size="sm"
+            data-testid="create-script-asset"
+            onClick={onCreateScriptAsset}
+            title="New RoseGold script asset"
+            className="px-1.5"
+          >
+            <Plus className="h-3 w-3" />
+            <FileCode2 className="h-3 w-3" />
+            <span className="hidden sm:inline">New .rg</span>
+          </Button>
+        </Group>
+      ) : (
+        <Group>
+          <Button
+            variant="ghost"
+            size="sm"
+            data-testid="add-sprite"
+            onClick={onAddSprite}
+            title="Add Sprite"
+            className="px-1.5"
+          >
+            <Plus className="h-3 w-3" />
+            <Square className="h-3 w-3" />
+            <span className="hidden sm:inline">Sprite</span>
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            data-testid="add-empty"
+            onClick={onAddEmpty}
+            title="Add Empty"
+            className="px-1.5"
+          >
+            <Plus className="h-3 w-3" />
+            <Circle className="h-3 w-3" />
+            <span className="hidden sm:inline">Empty</span>
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            data-testid="add-camera"
+            onClick={onAddCamera}
+            title="Add Camera"
+            className="px-1.5"
+          >
+            <Plus className="h-3 w-3" />
+            <Camera className="h-3 w-3" />
+            <span className="hidden sm:inline">Camera</span>
+          </Button>
+          {mode === '3d' && (
+            <>
+              <Button
+                variant="ghost"
+                size="sm"
+                data-testid="add-mesh"
+                onClick={onAddMesh}
+                title="Add Mesh"
+                className="px-1.5"
+              >
+                <Plus className="h-3 w-3" />
+                <Box className="h-3 w-3" />
+                <span className="hidden sm:inline">Mesh</span>
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                data-testid="add-light"
+                onClick={onAddLight}
+                title="Add Light"
+                className="px-1.5"
+              >
+                <Plus className="h-3 w-3" />
+                <Lightbulb className="h-3 w-3" />
+                <span className="hidden sm:inline">Light</span>
+              </Button>
+            </>
+          )}
+          <Button
+            variant="ghost"
+            size="sm"
+            data-testid="add-script"
+            onClick={onAddScript}
+            title="Add Script entity"
+            className="px-1.5"
+          >
+            <Plus className="h-3 w-3" />
+            <FileCode2 className="h-3 w-3" />
+            <span className="hidden sm:inline">Script</span>
+          </Button>
+          <Button
+            variant="toolbar"
+            size="icon"
+            disabled={!canDuplicate}
+            onClick={onDuplicate}
+            title="Duplicate (Ctrl+D)"
+            data-testid="duplicate"
+          >
+            <Copy className="h-3.5 w-3.5" />
+          </Button>
+          <Button
+            variant="danger"
+            size="icon"
+            disabled={!canDelete}
+            onClick={onDelete}
+            title="Delete (Del)"
+          >
+            <Trash2 className="h-3.5 w-3.5" />
+          </Button>
+        </Group>
+      )}
 
       <div className="ml-auto flex min-w-0 items-center gap-1.5">
         <div className="hidden min-w-0 flex-col items-end leading-none md:flex">
@@ -344,20 +369,22 @@ export function Toolbar({
           <Save className="h-3.5 w-3.5" />
           Save
         </Button>
-        <Button
-          variant={playing ? 'accent' : 'default'}
-          size="sm"
-          data-testid="play-toggle"
-          className={playing ? 'playing-indicator h-7' : 'h-7'}
-          onClick={onPlayToggle}
-        >
-          {playing ? (
-            <Pause className="h-3.5 w-3.5" />
-          ) : (
-            <Play className="h-3.5 w-3.5" />
-          )}
-          {playing ? 'Stop' : 'Play'}
-        </Button>
+        {!editingScript && (
+          <Button
+            variant={playing ? 'accent' : 'default'}
+            size="sm"
+            data-testid="play-toggle"
+            className={playing ? 'playing-indicator h-7' : 'h-7'}
+            onClick={onPlayToggle}
+          >
+            {playing ? (
+              <Pause className="h-3.5 w-3.5" />
+            ) : (
+              <Play className="h-3.5 w-3.5" />
+            )}
+            {playing ? 'Stop' : 'Play'}
+          </Button>
+        )}
       </div>
     </header>
   )

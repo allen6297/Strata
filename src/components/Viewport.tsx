@@ -518,7 +518,7 @@ export function Viewport({
   return (
     <div
       ref={wrapRef}
-      className="relative min-h-0 min-w-0 flex-1 bg-[var(--viewport)]"
+      className="relative h-full min-h-0 w-full bg-[var(--viewport)]"
     >
       <canvas
         ref={canvasRef}

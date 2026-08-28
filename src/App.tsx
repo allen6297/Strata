@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { AssetExplorer } from '@/components/AssetExplorer'
+import { NativeMenuBridge, type AppMenuActions } from '@/components/NativeMenuBridge'
+import { DockProvider } from '@/components/DockProvider'
+import { DockShell } from '@/components/DockShell'
 import { EditorView } from '@/components/EditorView'
 import { Hierarchy } from '@/components/Hierarchy'
 import { Inspector } from '@/components/Inspector'
-import { PanelSplit } from '@/components/PanelSplit'
-import { ScenePanel } from '@/components/ScenePanel'
+import { SceneModeTab } from '@/components/SceneModeTab'
 import { ScriptPanel } from '@/components/ScriptPanel'
 import { StatusBar } from '@/components/StatusBar'
 import { Toolbar } from '@/components/Toolbar'
@@ -13,12 +15,15 @@ import { useEntityHistory } from '@/hooks/useEntityHistory'
 import { playSoundAsset } from '@/lib/audio'
 import {
   applyDirectives,
+  buildHookProgram,
   collectReadyJobs,
   collectUpdateJobs,
   parseStrataDirectives,
   previewReadyDirectives,
   previewUpdateDirectives,
   runRoseGoldHooks,
+  runRoseGoldSource,
+  scriptHasHook,
   type RuntimeSideEffect,
 } from '@/lib/rosegold'
 import { useRuntimeInput } from '@/lib/runtime-input'
@@ -31,13 +36,7 @@ import {
 } from '@/lib/project'
 import { isTauri, openSceneFile, saveSceneFile } from '@/lib/desktop'
 import { engineLoadScene, engineTick } from '@/lib/engine'
-import {
-  clampLayout,
-  DEFAULT_LAYOUT,
-  loadLayout,
-  saveLayout,
-  type EditorLayout,
-} from '@/lib/layout'
+import { loadDockLayout, type DockZoneId, type PanelId } from '@/lib/dock-layout'
 import {
   createDefaultEntities,
   createDefaultScripts,
@@ -45,6 +44,7 @@ import {
   DEFAULT_SCENE_NAME,
   duplicateEntity,
   ensure3dContent,
+  entityDefaults,
   loadSceneFromStorage,
   loadScriptsFromStorage,
   parseSceneDocument,
@@ -77,6 +77,8 @@ import type {
   SceneMode,
   ToolMode,
 } from '@/types/scene'
+
+// MARK: - Boot
 
 function bootEntities() {
   return loadSceneFromStorage()?.entities ?? createDefaultEntities()
@@ -111,6 +113,8 @@ export default function App() {
     canRedo,
   } = history
 
+  // MARK: - State
+
   const [selectedIds, setSelectedIds] = useState<string[]>(() => {
     const first = bootEntities()[0]?.id
     return first ? [first] : []
@@ -138,7 +142,6 @@ export default function App() {
     light: 1,
     script: 1,
   })
-  const [layout, setLayout] = useState<EditorLayout>(() => loadLayout())
   const [camera, setCamera] = useState<CameraReadout>({
     x: 0,
     y: 0,
@@ -149,6 +152,27 @@ export default function App() {
   const [theme, setTheme] = useState<ThemeMode>(() => loadTheme())
   const [sceneMode, setSceneMode] = useState<SceneMode>(bootMode)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const getAppMenuActions = useCallback((): AppMenuActions => {
+    const a = menuActionsRef.current
+    return {
+      openProject: () => void a.openProject(),
+      saveProject: () => void a.saveProject(),
+      openScenePicker: a.openScenePicker,
+      saveScene: () => void a.saveScene(),
+      handleUndo: a.handleUndo,
+      handleRedo: a.handleRedo,
+      duplicateSelected: a.duplicateSelected,
+      deleteSelected: a.deleteSelected,
+      togglePlay: () => void a.togglePlay(),
+      handleModeChange: a.handleModeChange,
+      addEntity: a.addEntity,
+      createScript: a.createScript,
+      setTool: a.setTool,
+      setSnap: a.setSnap,
+      handleThemeToggle: a.handleThemeToggle,
+      flashStatus: a.flashStatus,
+    }
+  }, [])
   const statusTimer = useRef<number | null>(null)
   const entitiesRefForPlay = useRef(entities)
   const scriptsRefForPlay = useRef(scripts)
@@ -158,6 +182,8 @@ export default function App() {
   playSceneRef.current = { sceneName, entities, sceneMode, scripts }
 
   const runtimeInput = useRuntimeInput(playing)
+
+  // MARK: - Derived data
 
   const assets = useMemo(
     () => [...scripts, ...(diskAssets.length ? diskAssets : STATIC_ASSETS)],
@@ -192,6 +218,8 @@ export default function App() {
     }
     return map
   }, [audioClips])
+
+  // MARK: - Runtime side effects
 
   const runSideEffects = useCallback((effects: RuntimeSideEffect[]) => {
     for (const fx of effects) {
@@ -230,17 +258,14 @@ export default function App() {
     return null
   }, [scripts, selectedAssetId, selected])
 
-  const updateLayout = useCallback(
-    (patch: Partial<EditorLayout> | ((prev: EditorLayout) => Partial<EditorLayout>)) => {
-      setLayout((prev) => {
-        const resolved = typeof patch === 'function' ? patch(prev) : patch
-        const next = clampLayout({ ...prev, ...resolved })
-        saveLayout(next)
-        return next
-      })
-    },
-    [],
-  )
+  const attachedEntities = useMemo(() => {
+    if (!activeScript) return []
+    return entities
+      .filter((e) => e.scriptId === activeScript.id)
+      .map((e) => e.name)
+  }, [entities, activeScript])
+
+  // MARK: - UI helpers
 
   const handleThemeToggle = useCallback(() => {
     setTheme((prev) => {
@@ -263,6 +288,8 @@ export default function App() {
     setScripts(next)
     saveScriptsToStorage(next)
   }, [])
+
+  // MARK: - Selection & entities
 
   const selectEntity = useCallback(
     (id: string | null, opts?: { additive?: boolean; range?: boolean }) => {
@@ -434,6 +461,8 @@ export default function App() {
     markDirty()
   }, [commit, entities, markDirty, selectedIds])
 
+  // MARK: - Scene I/O
+
   const applyOpenedScene = useCallback(
     (doc: SceneDocument, path: string | null) => {
       replace(doc.entities)
@@ -507,6 +536,41 @@ export default function App() {
     redo()
     markDirty()
   }, [markDirty, redo])
+
+  // MARK: - Play mode
+
+  const clearPlayLog = useCallback(() => setPlayLog(''), [])
+
+  const runScript = useCallback(
+    async (script: AssetItem) => {
+      let entity = entities.find((e) => e.scriptId === script.id)
+      if (!entity) {
+        entity = entityDefaults({
+          id: uid('ent'),
+          name: 'Preview',
+          kind: 'empty',
+        })
+      }
+      const content = script.content ?? ''
+      if (!scriptHasHook(content, 'on_ready')) {
+        setPlayLog('No on_ready hook found in this script.')
+        flashStatus('No on_ready hook')
+        return
+      }
+      flashStatus('Running on_ready…')
+      const source = buildHookProgram(content, 'on_ready', entity)
+      const result = await runRoseGoldSource(source)
+      const chunks = [
+        result.message,
+        result.stdout && `stdout:\n${result.stdout}`,
+        result.stderr && `stderr:\n${result.stderr}`,
+      ].filter(Boolean)
+      setPlayLog(chunks.join('\n\n'))
+      if (!result.ok) flashStatus(result.message.slice(0, 80))
+      else flashStatus('on_ready ok')
+    },
+    [entities, flashStatus],
+  )
 
   const togglePlay = useCallback(async () => {
     if (playing) {
@@ -605,6 +669,8 @@ export default function App() {
       window.clearInterval(id)
     }
   }, [playing, applyTransient, runSideEffects, runtimeInput])
+
+  // MARK: - Project
 
   const loadProjectFromPath = useCallback(
     async (path: string) => {
@@ -726,8 +792,20 @@ export default function App() {
     next.size = `${next.content!.length} B`
     persistScripts([...scripts, next])
     setSelectedAssetId(id)
+    setSceneMode('script')
     markDirty()
   }, [markDirty, persistScripts, scripts])
+
+  const handleAssetSelect = useCallback(
+    (id: string) => {
+      setSelectedAssetId(id)
+      const asset = assets.find((a) => a.id === id)
+      if (asset?.type === 'script') {
+        handleModeChange('script')
+      }
+    },
+    [assets, handleModeChange],
+  )
 
   const updateScriptContent = useCallback(
     (id: string, content: string) => {
@@ -751,8 +829,10 @@ export default function App() {
     let raf = 0
     let last = performance.now()
     const snap = playSceneRef.current
+    // Script mode is an editing state; the runtime engine only understands 2d/3d.
+    const engineMode = snap.sceneMode === 'script' ? '2d' : snap.sceneMode
     void engineLoadScene(
-      toSceneDocument(snap.sceneName, snap.entities, snap.scripts, snap.sceneMode),
+      toSceneDocument(snap.sceneName, snap.entities, snap.scripts, engineMode),
     )
     const loop = (now: number) => {
       if (cancelled) return
@@ -767,6 +847,8 @@ export default function App() {
       cancelAnimationFrame(raf)
     }
   }, [playing])
+
+  // MARK: - Keyboard shortcuts
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -802,6 +884,21 @@ export default function App() {
       }
       if (typing) return
 
+      if (e.key === '1') {
+        handleModeChange('2d')
+        return
+      }
+      if (e.key === '2') {
+        handleModeChange('3d')
+        return
+      }
+      if (e.key === '3') {
+        handleModeChange('script')
+        return
+      }
+
+      if (sceneMode === 'script') return
+
       if (e.key === 'v' || e.key === 'V') setTool('select')
       if (e.key === 'h' || e.key === 'H') setTool('move')
       if (e.key === 'g' || e.key === 'G') setSnap((s) => !s)
@@ -819,67 +916,59 @@ export default function App() {
   }, [
     deleteSelected,
     duplicateSelected,
+    handleModeChange,
     handleRedo,
     handleUndo,
     saveScene,
+    sceneMode,
     togglePlay,
   ])
 
-  return (
-    <div className="flex h-full flex-col">
-      <Toolbar
-        tool={tool}
-        playing={playing}
-        snap={snap}
-        sceneName={sceneName}
-        projectLabel={projectLabel}
-        dirty={dirty}
-        status={status}
-        theme={theme}
-        mode={sceneMode}
-        canDelete={selectedIds.length > 0}
-        canDuplicate={selectedIds.length > 0}
-        canUndo={canUndo}
-        canRedo={canRedo}
-        onToolChange={setTool}
-        onSnapToggle={() => setSnap((s) => !s)}
-        onPlayToggle={() => void togglePlay()}
-        onAddSprite={() => addEntity('sprite')}
-        onAddEmpty={() => addEntity('empty')}
-        onAddCamera={() => addEntity('camera')}
-        onAddMesh={() => addEntity('mesh')}
-        onAddLight={() => addEntity('light')}
-        onAddScript={() => addEntity('script')}
-        onDelete={deleteSelected}
-        onDuplicate={duplicateSelected}
-        onUndo={handleUndo}
-        onRedo={handleRedo}
-        onSave={() => void saveScene()}
-        onLoad={openScenePicker}
-        onOpenProject={() => void openProject()}
-        onSaveProject={() => void saveProject()}
-        onThemeToggle={handleThemeToggle}
-      />
+  // MARK: - Native menu
+  const menuActionsRef = useRef({
+    openProject,
+    saveProject,
+    openScenePicker,
+    saveScene,
+    handleUndo,
+    handleRedo,
+    duplicateSelected,
+    deleteSelected,
+    togglePlay,
+    handleModeChange,
+    addEntity,
+    createScript,
+    setTool,
+    setSnap,
+    handleThemeToggle,
+    flashStatus,
+  })
+  menuActionsRef.current = {
+    openProject,
+    saveProject,
+    openScenePicker,
+    saveScene,
+    handleUndo,
+    handleRedo,
+    duplicateSelected,
+    deleteSelected,
+    togglePlay,
+    handleModeChange,
+    addEntity,
+    createScript,
+    setTool,
+    setSnap,
+    handleThemeToggle,
+    flashStatus,
+  }
 
-      <input
-        ref={fileInputRef}
-        type="file"
-        accept=".scene,.json,application/json"
-        className="hidden"
-        data-testid="scene-file-input"
-        onChange={(e) => {
-          void onSceneFile(e.target.files?.[0])
-          e.target.value = ''
-        }}
-      />
+  // MARK: - Dock panels
 
-      <div className="flex min-h-0 flex-1">
-        <div
-          className="flex min-h-0 shrink-0 flex-col"
-          style={{ width: layout.hierarchyWidth }}
-        >
-          <ScenePanel mode={sceneMode} onModeChange={handleModeChange} />
-          <div className="min-h-0 flex-1">
+  const renderDockPanel = useCallback(
+    (panelId: PanelId, opts: { chromeless: boolean; zone: DockZoneId }) => {
+      switch (panelId) {
+        case 'hierarchy':
+          return (
             <Hierarchy
               entities={entities}
               selectedIds={selectedIds}
@@ -893,121 +982,219 @@ export default function App() {
                 const e = entities.find((x) => x.id === id)
                 if (e) updateEntity(id, { locked: !e.locked })
               }}
+              chromeless={opts.chromeless}
+              dockZone={opts.zone}
             />
-          </div>
-        </div>
-
-        <PanelSplit
-          orientation="horizontal"
-          onDrag={(delta) =>
-            updateLayout((prev) => ({
-              hierarchyWidth: prev.hierarchyWidth + delta,
-            }))
-          }
-          onReset={() =>
-            updateLayout({ hierarchyWidth: DEFAULT_LAYOUT.hierarchyWidth })
-          }
-        />
-
-        <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-          {sceneMode === '3d' ? (
-            <EditorView
-              entities={entities}
-              selectedId={primaryId}
-              tool={tool}
-              playing={playing}
-              theme={theme}
-              mode={sceneMode}
-              onSelect={(id) => selectEntity(id)}
-              onMoveEntity={onMoveEntity3d}
-              onMoveBegin={beginTransient}
-              onMoveEnd={endTransient}
-              onCameraChange={setCamera}
-            />
-          ) : (
-            <Viewport
-              entities={entities}
-              selectedIds={selectedIds}
-              tool={tool}
-              playing={playing}
-              snap={snap}
-              textureUrlById={textureUrlById}
-              onSelect={selectEntity}
-              onMoveEntity={onMoveEntity}
-              onMoveBegin={beginTransient}
-              onMoveEnd={endTransient}
-            />
-          )}
-          <AssetExplorer
-            assets={assets}
-            selectedId={selectedAssetId}
-            projectLabel={projectLabel}
-            loading={assetsLoading}
-            error={assetsError}
-            onSelect={setSelectedAssetId}
-            onRefresh={() => void refreshProject()}
-            onOpenProject={() => void openProject()}
-            onActivate={(asset) => {
-              if (asset.type === 'texture' && primaryId) {
-                updateEntity(primaryId, { textureId: asset.id })
-                flashStatus(`Texture → ${asset.name}`)
-              } else if (asset.type === 'script' && primaryId) {
-                updateEntity(primaryId, { scriptId: asset.id })
-                setSelectedAssetId(asset.id)
-                flashStatus(`Script → ${asset.name}`)
-              } else if (asset.type === 'scene' && asset.content) {
-                try {
-                  const doc = parseSceneDocument(JSON.parse(asset.content))
-                  applyOpenedScene(doc, null)
-                  flashStatus(`Opened ${asset.name}`)
-                } catch {
-                  flashStatus(`Could not open ${asset.name}`)
+          )
+        case 'viewport':
+          return (
+            <div className="relative flex h-full min-h-0 w-full flex-col">
+              <SceneModeTab mode={sceneMode} onModeChange={handleModeChange} />
+              <div className="min-h-0 flex-1">
+                {sceneMode === '3d' ? (
+                  <EditorView
+                    entities={entities}
+                    selectedId={primaryId}
+                    tool={tool}
+                    playing={playing}
+                    theme={theme}
+                    mode={sceneMode}
+                    onSelect={(id) => selectEntity(id)}
+                    onMoveEntity={onMoveEntity3d}
+                    onMoveBegin={beginTransient}
+                    onMoveEnd={endTransient}
+                    onCameraChange={setCamera}
+                  />
+                ) : sceneMode === 'script' ? (
+                  <ScriptPanel
+                    script={activeScript}
+                    playLog={playLog}
+                    attachedEntities={attachedEntities}
+                    onChangeContent={updateScriptContent}
+                    onCreateScript={createScript}
+                    onRunScript={runScript}
+                    onClearLog={clearPlayLog}
+                  />
+                ) : (
+                  <Viewport
+                    entities={entities}
+                    selectedIds={selectedIds}
+                    tool={tool}
+                    playing={playing}
+                    snap={snap}
+                    textureUrlById={textureUrlById}
+                    onSelect={selectEntity}
+                    onMoveEntity={onMoveEntity}
+                    onMoveBegin={beginTransient}
+                    onMoveEnd={endTransient}
+                  />
+                )}
+              </div>
+            </div>
+          )
+        case 'assets':
+          return (
+            <AssetExplorer
+              assets={assets}
+              selectedId={selectedAssetId}
+              projectLabel={projectLabel}
+              loading={assetsLoading}
+              error={assetsError}
+              onSelect={handleAssetSelect}
+              onRefresh={() => void refreshProject()}
+              onOpenProject={() => void openProject()}
+              onCreateScript={createScript}
+              chromeless={opts.chromeless}
+              dockZone={opts.zone}
+              onActivate={(asset) => {
+                if (asset.type === 'texture' && primaryId) {
+                  updateEntity(primaryId, { textureId: asset.id })
+                  flashStatus(`Texture → ${asset.name}`)
+                } else if (asset.type === 'script') {
+                  handleModeChange('script')
+                  setSelectedAssetId(asset.id)
+                  if (primaryId) {
+                    updateEntity(primaryId, { scriptId: asset.id })
+                    flashStatus(`Script → ${asset.name}`)
+                  } else {
+                    flashStatus(`Editing ${asset.name}`)
+                  }
+                } else if (asset.type === 'scene' && asset.content) {
+                  try {
+                    const doc = parseSceneDocument(JSON.parse(asset.content))
+                    applyOpenedScene(doc, null)
+                    flashStatus(`Opened ${asset.name}`)
+                  } catch {
+                    flashStatus(`Could not open ${asset.name}`)
+                  }
                 }
-              }
-            }}
-          />
-          <ScriptPanel
-            script={activeScript}
-            playLog={playLog}
-            onChangeContent={updateScriptContent}
-            onCreateScript={createScript}
-          />
-        </div>
+              }}
+            />
+          )
+        case 'inspector':
+          return (
+            <Inspector
+              entity={selected}
+              selectedCount={selectedIds.length}
+              entities={entities}
+              scripts={scripts}
+              textures={textures}
+              audioClips={audioClips}
+              audioUrlById={audioUrlById}
+              mode={sceneMode}
+              onChange={updateEntity}
+              chromeless={opts.chromeless}
+              dockZone={opts.zone}
+            />
+          )
+      }
+    },
+    [
+      activeScript,
+      applyOpenedScene,
+      assets,
+      assetsError,
+      assetsLoading,
+      attachedEntities,
+      audioClips,
+      audioUrlById,
+      beginTransient,
+      clearPlayLog,
+      createScript,
+      endTransient,
+      entities,
+      flashStatus,
+      handleAssetSelect,
+      handleModeChange,
+      onMoveEntity,
+      onMoveEntity3d,
+      openProject,
+      playLog,
+      playing,
+      primaryId,
+      projectLabel,
+      refreshProject,
+      reparent,
+      runScript,
+      sceneMode,
+      scripts,
+      selectEntity,
+      selected,
+      selectedAssetId,
+      selectedIds,
+      snap,
+      textureUrlById,
+      theme,
+      tool,
+      updateEntity,
+      updateScriptContent,
+    ],
+  )
 
-        <PanelSplit
-          orientation="horizontal"
-          onDrag={(delta) =>
-            updateLayout((prev) => ({
-              inspectorWidth: prev.inspectorWidth - delta,
-            }))
-          }
-          onReset={() =>
-            updateLayout({ inspectorWidth: DEFAULT_LAYOUT.inspectorWidth })
-          }
+  // MARK: - Render
+
+  return (
+    <DockProvider initialLayout={loadDockLayout()}>
+      <NativeMenuBridge getActions={getAppMenuActions} />
+      <div className="flex h-full flex-col">
+        <Toolbar
+          tool={tool}
+          playing={playing}
+          snap={snap}
+          sceneName={sceneName}
+          projectLabel={projectLabel}
+          dirty={dirty}
+          status={status}
+          theme={theme}
+          mode={sceneMode}
+          canDelete={selectedIds.length > 0}
+          canDuplicate={selectedIds.length > 0}
+          canUndo={canUndo}
+          canRedo={canRedo}
+          onToolChange={setTool}
+          onSnapToggle={() => setSnap((s) => !s)}
+          onPlayToggle={() => void togglePlay()}
+          onAddSprite={() => addEntity('sprite')}
+          onAddEmpty={() => addEntity('empty')}
+          onAddCamera={() => addEntity('camera')}
+          onAddMesh={() => addEntity('mesh')}
+          onAddLight={() => addEntity('light')}
+          onAddScript={() => addEntity('script')}
+          onCreateScriptAsset={createScript}
+          onDelete={deleteSelected}
+          onDuplicate={duplicateSelected}
+          onUndo={handleUndo}
+          onRedo={handleRedo}
+          onSave={() => void saveScene()}
+          onLoad={openScenePicker}
+          onOpenProject={() => void openProject()}
+          onSaveProject={() => void saveProject()}
+          onThemeToggle={handleThemeToggle}
         />
 
-        <Inspector
-          entity={selected}
-          selectedCount={selectedIds.length}
-          entities={entities}
-          scripts={scripts}
-          textures={textures}
-          audioClips={audioClips}
-          audioUrlById={audioUrlById}
-          mode={sceneMode}
-          onChange={updateEntity}
-          style={{ width: layout.inspectorWidth }}
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept=".scene,.json,application/json"
+          className="hidden"
+          data-testid="scene-file-input"
+          onChange={(e) => {
+            void onSceneFile(e.target.files?.[0])
+            e.target.value = ''
+          }}
+        />
+
+        <DockShell renderPanel={renderDockPanel} />
+
+        <StatusBar
+          tool={tool}
+          selectionName={selected?.name ?? null}
+          entityCount={entities.length}
+          dirty={dirty}
+          status={status}
+          camera={camera}
         />
       </div>
-
-      <StatusBar
-        tool={tool}
-        selectionName={selected?.name ?? null}
-        entityCount={entities.length}
-        dirty={dirty}
-        status={status}
-        camera={camera}
-      />
-    </div>
+    </DockProvider>
   )
 }

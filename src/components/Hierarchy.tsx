@@ -1,5 +1,8 @@
 import { Button } from '@/components/ui/button'
+import { DockDragHandle } from '@/components/DockDragHandle'
+import { DockPanelClose } from '@/components/DockPanelClose'
 import { flattenHierarchy } from '@/lib/transforms'
+import type { DockZoneId } from '@/lib/dock-layout'
 import { cn } from '@/lib/utils'
 import type { Entity } from '@/types/scene'
 import {
@@ -20,6 +23,8 @@ interface HierarchyProps {
   onToggleVisible: (id: string) => void
   onToggleLocked: (id: string) => void
   onReparent: (childId: string, parentId: string | null) => void
+  chromeless?: boolean
+  dockZone?: DockZoneId
 }
 
 function kindIcon(kind: Entity['kind']) {
@@ -40,21 +45,29 @@ export function Hierarchy({
   onToggleVisible,
   onToggleLocked,
   onReparent,
+  chromeless = false,
+  dockZone,
 }: HierarchyProps) {
   const rows = flattenHierarchy(entities)
   const primary = selectedIds[selectedIds.length - 1] ?? null
 
   return (
-    <aside className="panel-animate flex h-full min-h-0 w-60 shrink-0 flex-col border-r border-[var(--border)] bg-[var(--bg-panel)]">
-      <div className="flex h-8 items-center border-b border-[var(--border)] px-3">
-        <h2 className="text-[11px] font-semibold uppercase tracking-wider text-[var(--text-muted)]">
-          Hierarchy
-        </h2>
-        <span className="ml-auto font-mono text-[10px] text-[var(--text-muted)]">
-          {entities.length}
-          {selectedIds.length > 1 ? ` · ${selectedIds.length} sel` : ''}
-        </span>
-      </div>
+    <aside className="panel-animate flex h-full min-h-0 w-full flex-col bg-[var(--bg-panel)]">
+      {!chromeless && (
+        <div className="flex h-8 items-center gap-1 border-b border-[var(--border)] px-2">
+          {dockZone && (
+            <DockDragHandle panelId="hierarchy" zone={dockZone} />
+          )}
+          <h2 className="text-[11px] font-semibold uppercase tracking-wider text-[var(--text-muted)]">
+            Hierarchy
+          </h2>
+          <span className="ml-auto font-mono text-[10px] text-[var(--text-muted)]">
+            {entities.length}
+            {selectedIds.length > 1 ? ` · ${selectedIds.length} sel` : ''}
+          </span>
+          <DockPanelClose panelId="hierarchy" />
+        </div>
+      )}
       <div className="min-h-0 flex-1 overflow-y-auto p-1.5">
         {rows.length === 0 ? (
           <p className="px-2 py-6 text-center text-xs text-[var(--text-muted)]">

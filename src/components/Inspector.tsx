@@ -3,6 +3,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { playSoundUrl } from '@/lib/audio'
+import type { DockZoneId } from '@/lib/dock-layout'
 import { cn } from '@/lib/utils'
 import type { AssetItem, Entity, SceneMode } from '@/types/scene'
 import { Volume2 } from 'lucide-react'
@@ -19,6 +20,8 @@ interface InspectorProps {
   mode: SceneMode
   onChange: (id: string, patch: Partial<Entity>) => void
   style?: CSSProperties
+  chromeless?: boolean
+  dockZone?: DockZoneId
 }
 
 function Section({
@@ -114,14 +117,22 @@ export function Inspector({
   mode,
   onChange,
   style,
+  chromeless = false,
+  dockZone,
 }: InspectorProps) {
   if (!entity) {
     return (
       <aside
-        className="panel-animate flex h-full shrink-0 flex-col bg-[var(--bg-panel)]"
+        className="panel-animate flex h-full min-h-0 w-full flex-col bg-[var(--bg-panel)]"
         style={style}
       >
-        <PanelHeader title="Inspector" />
+        {!chromeless && (
+          <PanelHeader
+            title="Inspector"
+            dockPanel="inspector"
+            dockZone={dockZone}
+          />
+        )}
         <p className="px-3 py-8 text-center text-[11px] text-[var(--text-muted)]">
           Select an entity in the hierarchy or viewport to edit its properties.
         </p>
@@ -135,17 +146,21 @@ export function Inspector({
 
   return (
     <aside
-      className="panel-animate flex h-full min-h-0 shrink-0 flex-col bg-[var(--bg-panel)]"
+      className="panel-animate flex h-full min-h-0 w-full flex-col bg-[var(--bg-panel)]"
       style={style}
     >
-      <PanelHeader
-        title="Inspector"
-        meta={
-          <span className="rounded bg-[var(--bg-panel-raised)] px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-wide text-[var(--text-muted)]">
-            {selectedCount > 1 ? `${selectedCount} sel` : entity.kind}
-          </span>
-        }
-      />
+      {!chromeless && (
+        <PanelHeader
+          title="Inspector"
+          dockPanel="inspector"
+          dockZone={dockZone}
+          meta={
+            <span className="rounded bg-[var(--bg-panel-raised)] px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-wide text-[var(--text-muted)]">
+              {selectedCount > 1 ? `${selectedCount} sel` : entity.kind}
+            </span>
+          }
+        />
+      )}
 
       <div className="min-h-0 flex-1 space-y-3.5 overflow-y-auto p-2.5">
         {selectedCount > 1 && (
