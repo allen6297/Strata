@@ -4,6 +4,26 @@ pub enum Item {
   FnDecl(FnDecl),
   VarDecl(VarDecl),
   ConstDecl(ConstDecl),
+  StructDecl(StructDecl),
+  EnumDecl(EnumDecl),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct StructDecl {
+  pub name: String,
+  pub fields: Vec<(String, Type)>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct EnumDecl {
+  pub name: String,
+  pub variants: Vec<EnumVariant>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct EnumVariant {
+  pub name: String,
+  pub value_types: Vec<Type>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -87,6 +107,7 @@ pub enum ExprKind {
   Call { callee: Box<Expr>, args: Vec<Expr> },
   Member { object: Box<Expr>, name: String },
   Index { object: Box<Expr>, index: Box<Expr> },
+  StructLiteral { name: String, fields: Vec<(String, Expr)> },
   Assign { op: AssignOp, left: Box<Expr>, right: Box<Expr> },
   FString(Vec<FStringPart>),
   Range { start: Box<Expr>, end: Box<Expr>, inclusive: bool },
@@ -212,11 +233,63 @@ impl Parser {
       TokenKind::Fn => Ok(Item::FnDecl(self.parse_fn_decl()?)),
       TokenKind::Var => Ok(Item::VarDecl(self.parse_var_decl()?)),
       TokenKind::Const => Ok(Item::ConstDecl(self.parse_const_decl()?)),
+      TokenKind::Struct => Ok(Item::StructDecl(self.parse_struct_decl()?)),
+      TokenKind::Enum => Ok(Item::EnumDecl(self.parse_enum_decl()?)),
       _ => {
         let t = &self.tokens[self.pos];
         Err(format!("expected top-level item at {}:{}", t.span.line, t.span.col))
       }
     }
+  }
+
+  fn parse_struct_decl(&mut self) -> Result<StructDecl, String> {
+    self.advance(); // struct
+    let name = self.expect_ident("expected struct name")?;
+    self.expect(TokenKind::LBrace, "expected '{' before struct fields")?;
+    let mut fields = Vec::new();
+    if !self.at(TokenKind::RBrace) {
+      loop {
+        let field_name = self.expect_ident("expected field name")?;
+        self.expect(TokenKind::Colon, "expected ':' after field name")?;
+        let ty = self.parse_type()?;
+        fields.push((field_name, ty));
+        if !self.consume(TokenKind::Comma) || self.at(TokenKind::RBrace) {
+          break;
+        }
+      }
+    }
+    self.expect(TokenKind::RBrace, "expected '}' after struct fields")?;
+    Ok(StructDecl { name, fields })
+  }
+
+  fn parse_enum_decl(&mut self) -> Result<EnumDecl, String> {
+    self.advance(); // enum
+    let name = self.expect_ident("expected enum name")?;
+    self.expect(TokenKind::LBrace, "expected '{' before enum variants")?;
+    let mut variants = Vec::new();
+    if !self.at(TokenKind::RBrace) {
+      loop {
+        let variant_name = self.expect_ident("expected variant name")?;
+        let mut value_types = Vec::new();
+        if self.consume(TokenKind::LParen) {
+          if !self.at(TokenKind::RParen) {
+            loop {
+              value_types.push(self.parse_type()?);
+              if !self.consume(TokenKind::Comma) || self.at(TokenKind::RParen) {
+                break;
+              }
+            }
+          }
+          self.expect(TokenKind::RParen, "expected ')' after variant types")?;
+        }
+        variants.push(EnumVariant { name: variant_name, value_types });
+        if !self.consume(TokenKind::Comma) || self.at(TokenKind::RBrace) {
+          break;
+        }
+      }
+    }
+    self.expect(TokenKind::RBrace, "expected '}' after enum variants")?;
+    Ok(EnumDecl { name, variants })
   }
 
   fn parse_import(&mut self) -> Result<Import, String> {
@@ -599,6 +672,29 @@ impl Parser {
     self.parse_postfix()
   }
 
+  fn is_struct_literal_start(&self) -> bool {
+    if !self.at(TokenKind::LBrace) {
+      return false;
+    }
+    // Empty struct literal: Type {}
+    if let Some(t) = self.tokens.get(self.pos + 1) {
+      if t.kind == TokenKind::RBrace {
+        return true;
+      }
+    }
+    // Non-empty: Type { field: value, ... }
+    if let Some(t1) = self.tokens.get(self.pos + 1) {
+      if let TokenKind::Ident(_) = &t1.kind {
+        if let Some(t2) = self.tokens.get(self.pos + 2) {
+          if t2.kind == TokenKind::Colon {
+            return true;
+          }
+        }
+      }
+    }
+    false
+  }
+
   fn parse_postfix(&mut self) -> Result<Expr, String> {
     let mut expr = self.parse_primary()?;
     loop {
@@ -614,6 +710,27 @@ impl Parser {
         let index = self.parse_expr()?;
         self.expect(TokenKind::RBracket, "expected ']' after index")?;
         expr = Self::expr(ExprKind::Index { object: Box::new(expr), index: Box::new(index) }, span);
+      } else if self.is_struct_literal_start() {
+        if let ExprKind::Ident(name) = &expr.kind {
+          let name = name.clone();
+          self.advance(); // {
+          let mut fields = Vec::new();
+          if !self.at(TokenKind::RBrace) {
+            loop {
+              let field_name = self.expect_ident("expected field name")?;
+              self.expect(TokenKind::Colon, "expected ':' after field name")?;
+              let value = self.parse_expr()?;
+              fields.push((field_name, value));
+              if !self.consume(TokenKind::Comma) || self.at(TokenKind::RBrace) {
+                break;
+              }
+            }
+          }
+          self.expect(TokenKind::RBrace, "expected '}' after struct fields")?;
+          expr = Self::expr(ExprKind::StructLiteral { name, fields }, span);
+        } else {
+          break;
+        }
       } else {
         break;
       }

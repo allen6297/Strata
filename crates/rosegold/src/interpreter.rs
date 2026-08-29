@@ -9,6 +9,8 @@ use crate::{RuntimeError, Span};
 type ArrayRef = Rc<RefCell<Vec<Value>>>;
 type MapRef = Rc<RefCell<HashMap<String, Value>>>;
 type ModuleRef = Rc<RefCell<Module>>;
+type StructDefRef = Rc<StructDef>;
+type EnumDefRef = Rc<EnumDef>;
 
 pub trait ModuleResolver {
   fn resolve(&self, name: &str) -> Option<String>;
@@ -71,6 +73,23 @@ impl Module {
   }
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct StructDef {
+  pub name: String,
+  pub fields: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct EnumDef {
+  pub name: String,
+  pub variants: HashMap<String, EnumVariantDef>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct EnumVariantDef {
+  pub arity: usize,
+}
+
 fn runtime_err(message: impl Into<String>, span: Span) -> RuntimeError {
   RuntimeError { message: message.into(), span }
 }
@@ -89,6 +108,9 @@ pub enum Value {
   Enum { module: String, variant: String, value: Option<Box<Value>> },
   Module(ModuleRef),
   NativeFn { module: String, name: String },
+  Struct { name: String, fields: Rc<RefCell<HashMap<String, Value>>> },
+  StructType(StructDefRef),
+  EnumType(EnumDefRef),
 }
 
 impl Value {
@@ -106,6 +128,9 @@ impl Value {
       Value::Enum { value, .. } => value.is_some(),
       Value::Module(_) => true,
       Value::NativeFn { .. } => true,
+      Value::Struct { .. } => true,
+      Value::StructType(_) => true,
+      Value::EnumType(_) => true,
       Value::None => false,
       Value::Void => false,
     }
@@ -125,6 +150,9 @@ impl Value {
       Value::Enum { module, variant, .. } => format!("{}.{}", module, variant),
       Value::Module(_) => "Module".to_string(),
       Value::NativeFn { module, name } => format!("{}.{}", module, name),
+      Value::Struct { name, .. } => name.clone(),
+      Value::StructType(s) => s.name.clone(),
+      Value::EnumType(e) => e.name.clone(),
     }
   }
 
@@ -152,6 +180,12 @@ impl Value {
       }
       Value::Module(m) => format!("module({})", m.borrow().functions.keys().cloned().collect::<Vec<_>>().join(", ")),
       Value::NativeFn { module, name } => format!("{}.{}", module, name),
+      Value::Struct { name, fields } => {
+        let parts: Vec<String> = fields.borrow().iter().map(|(k, v)| format!("{}: {}", k, v.to_string())).collect();
+        format!("{} {{{}}}", name, parts.join(", "))
+      }
+      Value::StructType(s) => format!("struct {}", s.name),
+      Value::EnumType(e) => format!("enum {}", e.name),
     }
   }
 }
@@ -161,6 +195,8 @@ pub struct EvalContext {
   pub env: Environment,
   pub functions: HashMap<String, FnDecl>,
   pub stdlib: HashMap<String, HashMap<String, Value>>,
+  pub structs: HashMap<String, StructDefRef>,
+  pub enums: HashMap<String, EnumDefRef>,
   module_resolver: Rc<RefCell<dyn ModuleResolver>>,
   loaded_modules: Rc<RefCell<HashMap<String, ModuleRef>>>,
 }
@@ -219,6 +255,8 @@ impl EvalContext {
       env: Environment::new(),
       functions: HashMap::new(),
       stdlib: HashMap::new(),
+      structs: HashMap::new(),
+      enums: HashMap::new(),
       module_resolver: resolver,
       loaded_modules: Rc::new(RefCell::new(HashMap::new())),
     };
@@ -241,14 +279,39 @@ impl EvalContext {
     self.stdlib.insert("Option".to_string(), HashMap::new());
     self.stdlib.insert("result".to_string(), HashMap::new());
     self.stdlib.insert("Result".to_string(), HashMap::new());
+
+    let mut option_variants = HashMap::new();
+    option_variants.insert("Some".to_string(), EnumVariantDef { arity: 1 });
+    option_variants.insert("None".to_string(), EnumVariantDef { arity: 0 });
+    let option_def = Rc::new(EnumDef { name: "Option".to_string(), variants: option_variants });
+    self.enums.insert("Option".to_string(), option_def.clone());
+    self.enums.insert("option".to_string(), option_def);
+
+    let mut result_variants = HashMap::new();
+    result_variants.insert("Ok".to_string(), EnumVariantDef { arity: 1 });
+    result_variants.insert("Err".to_string(), EnumVariantDef { arity: 1 });
+    let result_def = Rc::new(EnumDef { name: "Result".to_string(), variants: result_variants });
+    self.enums.insert("Result".to_string(), result_def.clone());
+    self.enums.insert("result".to_string(), result_def);
   }
 
   pub fn run(&mut self, program: &[Item]) -> Result<Value, RuntimeError> {
-    // First pass: register function declarations and process imports
+    // First pass: register declarations
     for item in program {
       match item {
         Item::FnDecl(f) => {
           self.functions.insert(f.name.clone(), f.clone());
+        }
+        Item::StructDecl(s) => {
+          let fields = s.fields.iter().map(|(n, _)| n.clone()).collect();
+          self.structs.insert(s.name.clone(), Rc::new(StructDef { name: s.name.clone(), fields }));
+        }
+        Item::EnumDecl(e) => {
+          let mut variants = HashMap::new();
+          for v in &e.variants {
+            variants.insert(v.name.clone(), EnumVariantDef { arity: v.value_types.len() });
+          }
+          self.enums.insert(e.name.clone(), Rc::new(EnumDef { name: e.name.clone(), variants }));
         }
         Item::Import(i) => {
           self.eval_import(i, Span::default())?;
@@ -291,11 +354,11 @@ impl EvalContext {
     let module_name = &import.path[0];
 
     // Native stdlib modules (str, math, checks, option, Option, result, Result) are already
-    // wired via call_qualified; imports of them just bring the names into scope.
+    // wired via call_qualified. Importing them is a no-op; from-imports bind a native function
+    // value that delegates to call_qualified when called.
     if self.stdlib.contains_key(module_name) {
       if import.path.len() == 1 {
-        let name = import.alias.as_ref().unwrap_or(module_name);
-        self.env.define(name, Value::Module(Rc::new(RefCell::new(Module::native(module_name.clone())))));
+        // import module; — no-op for native stdlib modules
       } else if import.path.len() == 2 {
         let item_name = &import.path[1];
         let alias = import.alias.as_ref().unwrap_or(item_name).clone();
@@ -543,7 +606,16 @@ impl EvalContext {
         Ok(Value::Range(s, e, *inclusive))
       }
       ExprKind::Ident(name) => {
-        self.env.get(name).ok_or_else(|| runtime_err(format!("undefined variable '{}'", name), span))
+        if let Some(v) = self.env.get(name) {
+          return Ok(v);
+        }
+        if let Some(s) = self.structs.get(name) {
+          return Ok(Value::StructType(s.clone()));
+        }
+        if let Some(e) = self.enums.get(name) {
+          return Ok(Value::EnumType(e.clone()));
+        }
+        Err(runtime_err(format!("undefined variable '{}'", name), span))
       }
       ExprKind::Unary { op, expr } => {
         let value = self.eval_expr(expr)?;
@@ -605,26 +677,6 @@ impl EvalContext {
         }
       }
       ExprKind::Member { object, name } => {
-        // Qualified module member access: e.g. Option.None, Result.Ok
-        if let ExprKind::Ident(module) = &object.kind {
-          if self.stdlib.contains_key(module) {
-            match (module.as_str(), name.as_str()) {
-              ("Option" | "option", "None") => {
-                return Ok(Value::Enum { module: "Option".to_string(), variant: "None".to_string(), value: None });
-              }
-              ("Option" | "option", "Some") => {
-                return Err(runtime_err("Option.Some is a constructor and must be called with an argument".to_string(), span));
-              }
-              ("Result" | "result", "Ok") => {
-                return Err(runtime_err("Result.Ok is a constructor and must be called with an argument".to_string(), span));
-              }
-              ("Result" | "result", "Err") => {
-                return Err(runtime_err("Result.Err is a constructor and must be called with an argument".to_string(), span));
-              }
-              _ => {}
-            }
-          }
-        }
         let obj = self.eval_expr(object)?;
         match obj {
           Value::String(s) => {
@@ -645,6 +697,21 @@ impl EvalContext {
               _ => Err(runtime_err(format!("Map has no member '{}'", name), span)),
             }
           }
+          Value::Struct { name: struct_name, fields } => {
+            if let Some(v) = fields.borrow().get(name) {
+              return Ok(v.clone());
+            }
+            Err(runtime_err(format!("struct {} has no field '{}'", struct_name, name), span))
+          }
+          Value::EnumType(e) => {
+            if let Some(v) = e.variants.get(name) {
+              if v.arity == 0 {
+                return Ok(Value::Enum { module: e.name.clone(), variant: name.clone(), value: None });
+              }
+              return Err(runtime_err(format!("{}.{} is a constructor and must be called with an argument", e.name, name), span));
+            }
+            Err(runtime_err(format!("enum {} has no variant '{}'", e.name, name), span))
+          }
           Value::Module(m) => {
             let m = m.borrow();
             if m.functions.contains_key(name) {
@@ -656,8 +723,6 @@ impl EvalContext {
             Err(runtime_err(format!("module has no member '{}'", name), span))
           }
           _ => {
-            // Try stdlib module lookup when a module is stored as a value
-            // (std modules are not values, so we handle qualified calls separately)
             Err(runtime_err(format!("type {} has no member '{}'", obj.type_name(), name), span))
           }
         }
@@ -718,6 +783,19 @@ impl EvalContext {
           }
         }
         Ok(Value::Void)
+      }
+      ExprKind::StructLiteral { name, fields } => {
+        let def = self.structs.get(name).ok_or_else(|| runtime_err(format!("undefined struct '{}'", name), span))?;
+        let field_names = def.fields.clone();
+        let mut values = HashMap::new();
+        for (field_name, expr) in fields {
+          values.insert(field_name.clone(), self.eval_expr(expr)?);
+        }
+        // Ensure all declared fields are present (default missing ones to None)
+        for field in field_names {
+          values.entry(field).or_insert(Value::None);
+        }
+        Ok(Value::Struct { name: name.clone(), fields: Rc::new(RefCell::new(values)) })
       }
       ExprKind::Assign { op, left, right } => {
         let value = self.eval_expr(right)?;
@@ -896,6 +974,19 @@ impl EvalContext {
           match value { Some(v) => Ok((**v).clone()), None => Ok(_args[0].clone()) }
         }
         _ => Err(runtime_err(format!("Enum {} has no method '{}'", module, variant), span)),
+      },
+      Value::EnumType(e) => {
+        if let Some(v) = e.variants.get(name) {
+          if v.arity == 0 {
+            if !_args.is_empty() {
+              return Err(runtime_err(format!("{}.{} does not take arguments", e.name, name), span));
+            }
+            return Ok(Value::Enum { module: e.name.clone(), variant: name.to_string(), value: None });
+          }
+          let value = if _args.len() == 1 { _args[0].clone() } else { Value::Array(Rc::new(RefCell::new(_args))) };
+          return Ok(Value::Enum { module: e.name.clone(), variant: name.to_string(), value: Some(Box::new(value)) });
+        }
+        Err(runtime_err(format!("enum {} has no variant '{}'", e.name, name), span))
       },
       Value::Module(m) => {
         let m = m.borrow();

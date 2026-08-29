@@ -9,7 +9,7 @@ use std::cell::RefCell;
 
 pub use interpreter::{EvalContext, FileModuleResolver, HashMapResolver, Module, ModuleResolver, Value};
 pub use lexer::{Lexer, Token, TokenKind};
-pub use parser::{Block, Expr, FnDecl, Item, Literal, Parser, Stmt, Type};
+pub use parser::{Block, EnumDecl, EnumVariant, Expr, FnDecl, Item, Literal, Parser, Stmt, StructDecl, Type};
 
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct Span {
@@ -329,8 +329,6 @@ fn main(): Int {
   fn match_simple() {
     let out = assert_ok(
       r#"
-from option import Option;
-
 fn main(): Int {
     const x = Option.Some(1);
     match x {
@@ -348,8 +346,6 @@ fn main(): Int {
   fn enum_option_and_match() {
     let out = assert_ok(
       r#"
-from option import Option;
-
 fn main(): Int {
     const maybe: Option<Int> = Option.Some(42);
     print(maybe.unwrap_or(0));
@@ -370,8 +366,6 @@ fn main(): Int {
   fn enum_result_and_match() {
     let out = assert_ok(
       r#"
-from result import Result;
-
 fn lookup(m: Map<String, Int>, key: String): Result<Int, String> {
     if m.has(key) {
         return Result.Ok(m[key]);
@@ -551,5 +545,100 @@ fn main(): Int {
     let result = run_file(&dir.join("main.rg"));
     assert!(result.ok, "{}", result.stderr);
     assert!(result.stdout.contains("hello world"));
+  }
+
+  #[test]
+  fn struct_decl_and_field_access() {
+    let out = assert_ok(
+      r#"
+struct Point {
+    x: Float,
+    y: Float,
+}
+
+fn main(): Int {
+    var p = Point { x: 1.5, y: 2.5 };
+    print(p.x);
+    print(p.y);
+    return 0;
+}
+"#,
+    );
+    assert!(out.contains("1.5"));
+    assert!(out.contains("2.5"));
+  }
+
+  #[test]
+  fn struct_literal_missing_field_defaults_to_none() {
+    let out = assert_ok(
+      r#"
+struct Point {
+    x: Float,
+    y: Float,
+}
+
+fn main(): Int {
+    var p = Point { x: 3.0 };
+    print(p.x);
+    print(p.y);
+    return 0;
+}
+"#,
+    );
+    assert!(out.contains("3"));
+    assert!(out.contains("none"));
+  }
+
+  #[test]
+  fn enum_decl_and_match() {
+    let out = assert_ok(
+      r#"
+enum Color {
+    Red,
+    Green,
+    Blue,
+}
+
+fn main(): Int {
+    var c = Color.Red;
+    match c {
+        Red { print("red"); }
+        Green { print("green"); }
+        Blue { print("blue"); }
+    }
+    return 0;
+}
+"#,
+    );
+    assert!(out.contains("red"));
+  }
+
+  #[test]
+  fn enum_variant_with_args() {
+    let out = assert_ok(
+      r#"
+enum Shape {
+    Circle(Float),
+    Rect(Float, Float),
+}
+
+fn main(): Int {
+    var s = Shape.Circle(5.0);
+    match s {
+        Circle(r) { print(r); }
+        Rect(dims) { print(dims[0]); print(dims[1]); }
+    }
+    var t = Shape.Rect(2.0, 3.0);
+    match t {
+        Circle(r) { print(r); }
+        Rect(dims) { print(dims[0]); print(dims[1]); }
+    }
+    return 0;
+}
+"#,
+    );
+    assert!(out.contains("5"));
+    assert!(out.contains("2"));
+    assert!(out.contains("3"));
   }
 }
