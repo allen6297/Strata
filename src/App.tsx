@@ -188,6 +188,8 @@ export default function App() {
   const entitiesRefForPlay = useRef(entities)
   const scriptsRefForPlay = useRef(scripts)
   const scriptBindKeyRef = useRef('')
+  /** False until on_ready has applied — prevents the tick loop from racing Play start. */
+  const playReadyRef = useRef(false)
   entitiesRefForPlay.current = entities
   scriptsRefForPlay.current = scripts
 
@@ -584,6 +586,7 @@ export default function App() {
 
   const togglePlay = useCallback(async () => {
     if (playing) {
+      playReadyRef.current = false
       setPlaying(false)
       discardTransient()
       if (isTauri()) {
@@ -593,6 +596,7 @@ export default function App() {
       return
     }
     beginTransient()
+    playReadyRef.current = false
     setPlaying(true)
     scriptBindKeyRef.current = ''
     flashStatus('Playing…')
@@ -623,9 +627,13 @@ export default function App() {
         } else {
           flashStatus('on_ready ok')
         }
+        playReadyRef.current = true
       } else {
         setPlayLog('Engine load failed')
         flashStatus('Engine load failed')
+        playReadyRef.current = false
+        setPlaying(false)
+        discardTransient()
       }
       return
     }
@@ -639,8 +647,22 @@ export default function App() {
       result = await runRoseGoldHooks(jobs)
     }
     let readyDirectives = parseStrataDirectives(result.stdout, jobs)
-    if (!result.ok || !readyDirectives.length) {
-      readyDirectives = previewReadyDirectives(entities, scripts)
+    // Always merge static preview directives so spawn/sound still apply if
+    // WASM stdout parsing misses a section or the hook job failed.
+    const preview = previewReadyDirectives(entities, scripts)
+    if (!readyDirectives.length) {
+      readyDirectives = preview
+    } else if (preview.length) {
+      const seen = new Set(
+        readyDirectives.map((d) => `${d.type}:${'entityId' in d ? d.entityId : ''}`),
+      )
+      for (const d of preview) {
+        const key = `${d.type}:${'entityId' in d ? d.entityId : ''}`
+        if (d.type === 'spawn' || d.type === 'play_sound' || !seen.has(key)) {
+          readyDirectives.push(d)
+          seen.add(key)
+        }
+      }
     }
     if (readyDirectives.length) {
       const { entities: next, sideEffects } = applyDirectives(
@@ -651,9 +673,10 @@ export default function App() {
       applyTransient(() => next)
       runSideEffects(sideEffects)
     }
-    const backend = result.message.includes('wasm')
-      ? 'WASM RoseGold'
-      : 'Browser preview'
+    const backend =
+      result.message.includes('wasm') || result.message.includes('WASM')
+        ? 'WASM RoseGold'
+        : 'Browser preview'
     const chunks = [
       `${backend}: ${result.message}`,
       result.stdout && `stdout:\n${result.stdout}`,
@@ -663,6 +686,7 @@ export default function App() {
     setPlayLog(chunks.join('\n\n'))
     if (!result.ok) flashStatus(result.message.slice(0, 80))
     else flashStatus('on_ready ok')
+    playReadyRef.current = true
   }, [
     applyTransient,
     beginTransient,
@@ -690,7 +714,7 @@ export default function App() {
         if (cancelled) return
         const dt = Math.min(0.05, (now - last) / 1000)
         last = now
-        if (!busy) {
+        if (!busy && playReadyRef.current) {
           busy = true
           void (async () => {
             try {
@@ -746,6 +770,7 @@ export default function App() {
     const DT = 0.25
 
     const runTick = async () => {
+      if (!playReadyRef.current) return
       tick += 1
       const snapshot = entitiesRefForPlay.current
       const scriptSnap = scriptsRefForPlay.current
@@ -770,15 +795,16 @@ export default function App() {
         (await runRoseGoldWasm(
           jobs.map((j) => ({ label: j.label, source: j.source })),
         )) ?? (await runRoseGoldHooks(jobs))
-      if (cancelled) return
+      if (cancelled || !playReadyRef.current) return
 
       let directives = parseStrataDirectives(result.stdout, jobs)
       if (!result.ok || !directives.length) {
         directives = previewUpdateDirectives(snapshot, scriptSnap, keysCsv)
       }
       if (directives.length) {
+        // Always apply onto the latest entity list so we don't wipe spawns.
         const { entities: next, sideEffects } = applyDirectives(
-          snapshot,
+          entitiesRefForPlay.current,
           directives,
           assetSnap,
         )
@@ -803,7 +829,7 @@ export default function App() {
       cancelled = true
       window.clearInterval(id)
     }
-  }, [playing, applyTransient, runSideEffects, runtimeInput])
+  }, [playing, applyTransient, flashStatus, runSideEffects, runtimeInput])
 
   // MARK: - Project
 

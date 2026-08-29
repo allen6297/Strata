@@ -27,7 +27,8 @@ async function loadWasm(): Promise<WasmModule | null> {
         await mod.default()
       }
       return mod as unknown as WasmModule
-    } catch {
+    } catch (err) {
+      console.warn('[rosegold-wasm] unavailable, using directive preview', err)
       return null
     }
   })()

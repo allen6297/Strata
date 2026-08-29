@@ -19,8 +19,11 @@ export function zoomForCamera(
   viewportW: number,
   viewportH: number,
 ): number {
-  if (camera.width <= 0 || camera.height <= 0) return 1
-  const zx = viewportW / camera.width
-  const zy = viewportH / camera.height
-  return Math.min(4, Math.max(0.25, Math.min(zx, zy) * 0.92))
+  // Treat editor camera width/height as a frustum; clamp so tiny gizmos
+  // don't explode zoom and huge ones don't shrink the world to a speck.
+  const frustumW = Math.min(640, Math.max(160, camera.width || 320))
+  const frustumH = Math.min(360, Math.max(90, camera.height || 180))
+  const zx = viewportW / frustumW
+  const zy = viewportH / frustumH
+  return Math.min(4, Math.max(0.35, Math.min(zx, zy) * 0.92))
 }
