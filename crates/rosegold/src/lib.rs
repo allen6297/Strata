@@ -126,6 +126,98 @@ pub fn run_file(path: &Path) -> RunResult {
   run_with_context(&source, &mut ctx)
 }
 
+/// Run all `@test` functions in `source`. Does not call `main`.
+pub fn run_tests(source: &str) -> RunResult {
+  let mut lexer = Lexer::new(source);
+  let tokens = match lexer.tokenize() {
+    Ok(tokens) => tokens,
+    Err(e) => {
+      return RunResult {
+        ok: false,
+        stdout: String::new(),
+        stderr: e.clone(),
+        message: e,
+      }
+    }
+  };
+  let program = match Parser::new(tokens).parse() {
+    Ok(p) => p,
+    Err(e) => {
+      return RunResult {
+        ok: false,
+        stdout: String::new(),
+        stderr: e.clone(),
+        message: e,
+      }
+    }
+  };
+  if let Err(e) = typecheck::typecheck(&program) {
+    return RunResult {
+      ok: false,
+      stdout: String::new(),
+      stderr: e.clone(),
+      message: e,
+    };
+  }
+
+  let tests: Vec<_> = program
+    .iter()
+    .filter_map(|item| match item {
+      Item::FnDecl(f) if f.is_test => Some(f.name.clone()),
+      _ => None,
+    })
+    .collect();
+
+  if tests.is_empty() {
+    return RunResult {
+      ok: true,
+      stdout: String::new(),
+      stderr: String::new(),
+      message: "no @test functions".into(),
+    };
+  }
+
+  let mut ctx = EvalContext::new();
+  if let Err(e) = ctx.load_program(&program) {
+    let msg = e.to_string();
+    return RunResult {
+      ok: false,
+      stdout: ctx.stdout.clone(),
+      stderr: msg.clone(),
+      message: msg,
+    };
+  }
+
+  let mut failed = 0usize;
+  for name in &tests {
+    match ctx.call(name, vec![]) {
+      Ok(_) => {
+        ctx.stdout.push_str(&format!("ok {name}\n"));
+      }
+      Err(e) => {
+        failed += 1;
+        ctx.stdout.push_str(&format!("FAIL {name}: {e}\n"));
+      }
+    }
+  }
+
+  let total = tests.len();
+  let passed = total - failed;
+  let summary = format!("{passed}/{total} tests passed");
+  ctx.stdout.push_str(&summary);
+  ctx.stdout.push('\n');
+  RunResult {
+    ok: failed == 0,
+    stdout: ctx.stdout.clone(),
+    stderr: if failed == 0 {
+      String::new()
+    } else {
+      summary.clone()
+    },
+    message: summary,
+  }
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
@@ -1016,5 +1108,49 @@ fn main(): Int {
 "#,
     );
     assert_eq!(out, "1\n");
+  }
+
+  #[test]
+  fn run_tests_executes_test_fns() {
+    let result = run_tests(
+      r#"
+import checks;
+
+@test
+fn test_add() {
+    checks.eq(2 + 2, 4);
+}
+
+@test
+fn test_fail_example() {
+    checks.eq(1, 2);
+}
+
+fn main(): Int {
+    return 0;
+}
+"#,
+    );
+    assert!(!result.ok);
+    assert!(result.stdout.contains("ok test_add"));
+    assert!(result.stdout.contains("FAIL test_fail_example"));
+    assert!(result.stdout.contains("1/2 tests passed"));
+  }
+
+  #[test]
+  fn run_tests_all_pass() {
+    let result = run_tests(
+      r#"
+import checks;
+
+@test
+fn test_ok() {
+    checks.eq(1, 1);
+}
+"#,
+    );
+    assert!(result.ok, "{}", result.stderr);
+    assert!(result.stdout.contains("ok test_ok"));
+    assert!(result.stdout.contains("1/1 tests passed"));
   }
 }

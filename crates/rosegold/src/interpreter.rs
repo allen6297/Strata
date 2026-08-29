@@ -44,21 +44,29 @@ impl FileModuleResolver {
 
 impl ModuleResolver for FileModuleResolver {
   fn resolve(&self, name: &str) -> Option<String> {
-    let dotted = name.replace('.', std::path::MAIN_SEPARATOR_STR);
-    let candidates = [
-      self.base.join(format!("{}.rg", name)),
-      self.base.join(format!("{}.rg", dotted)),
-      self.base.join(&dotted).join("lib.rg"),
-      self.base.join(&dotted).join("main.rg"),
-      self.base.join(name).join("lib.rg"),
-      self.base.join(name).join("main.rg"),
-    ];
-    for path in &candidates {
-      if path.exists() {
-        return std::fs::read_to_string(path).ok();
-      }
+    #[cfg(target_arch = "wasm32")]
+    {
+      let _ = (&self.base, name);
+      return None;
     }
-    None
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+      let dotted = name.replace('.', std::path::MAIN_SEPARATOR_STR);
+      let candidates = [
+        self.base.join(format!("{}.rg", name)),
+        self.base.join(format!("{}.rg", dotted)),
+        self.base.join(&dotted).join("lib.rg"),
+        self.base.join(&dotted).join("main.rg"),
+        self.base.join(name).join("lib.rg"),
+        self.base.join(name).join("main.rg"),
+      ];
+      for path in &candidates {
+        if path.exists() {
+          return std::fs::read_to_string(path).ok();
+        }
+      }
+      None
+    }
   }
 }
 
@@ -1282,30 +1290,54 @@ impl EvalContext {
       ("io", "read_text") => {
         if args.len() != 1 { return Err(runtime_err("io.read_text takes 1 argument".to_string(), span)); }
         let path = match &args[0] { Value::String(s) => s.clone(), _ => return Err(runtime_err("io.read_text expects String path".to_string(), span)) };
-        match std::fs::read_to_string(&path) {
-          Ok(content) => Ok(Value::String(content)),
-          Err(e) => Ok(Value::Enum {
+        #[cfg(target_arch = "wasm32")]
+        {
+          let _ = path;
+          Ok(Value::Enum {
             module: "Result".to_string(),
             variant: "Err".to_string(),
-            value: Some(Box::new(Value::String(e.to_string()))),
-          }),
+            value: Some(Box::new(Value::String("io.read_text is unavailable in WASM".into()))),
+          })
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+          match std::fs::read_to_string(&path) {
+            Ok(content) => Ok(Value::String(content)),
+            Err(e) => Ok(Value::Enum {
+              module: "Result".to_string(),
+              variant: "Err".to_string(),
+              value: Some(Box::new(Value::String(e.to_string()))),
+            }),
+          }
         }
       }
       ("io", "write_text") => {
         if args.len() != 2 { return Err(runtime_err("io.write_text takes 2 arguments".to_string(), span)); }
         let path = match &args[0] { Value::String(s) => s.clone(), _ => return Err(runtime_err("io.write_text expects String path".to_string(), span)) };
         let content = match &args[1] { Value::String(s) => s.clone(), _ => return Err(runtime_err("io.write_text expects String content".to_string(), span)) };
-        match std::fs::write(&path, content) {
-          Ok(()) => Ok(Value::Enum {
-            module: "Result".to_string(),
-            variant: "Ok".to_string(),
-            value: Some(Box::new(Value::Void)),
-          }),
-          Err(e) => Ok(Value::Enum {
+        #[cfg(target_arch = "wasm32")]
+        {
+          let _ = (path, content);
+          Ok(Value::Enum {
             module: "Result".to_string(),
             variant: "Err".to_string(),
-            value: Some(Box::new(Value::String(e.to_string()))),
-          }),
+            value: Some(Box::new(Value::String("io.write_text is unavailable in WASM".into()))),
+          })
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+          match std::fs::write(&path, content) {
+            Ok(()) => Ok(Value::Enum {
+              module: "Result".to_string(),
+              variant: "Ok".to_string(),
+              value: Some(Box::new(Value::Void)),
+            }),
+            Err(e) => Ok(Value::Enum {
+              module: "Result".to_string(),
+              variant: "Err".to_string(),
+              value: Some(Box::new(Value::String(e.to_string()))),
+            }),
+          }
         }
       }
       ("io", "exists") => {
@@ -1316,7 +1348,15 @@ impl EvalContext {
           Value::String(s) => s.clone(),
           _ => return Err(runtime_err("io.exists expects String path".to_string(), span)),
         };
-        Ok(Value::Bool(std::path::Path::new(&path).exists()))
+        #[cfg(target_arch = "wasm32")]
+        {
+          let _ = path;
+          Ok(Value::Bool(false))
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+          Ok(Value::Bool(std::path::Path::new(&path).exists()))
+        }
       }
       ("Array", "first") => {
         if args.len() != 1 { return Err(runtime_err("Array.first takes 1 argument".to_string(), span)); }

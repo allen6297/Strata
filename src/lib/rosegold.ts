@@ -6,8 +6,9 @@ import { isTauri } from '@/lib/tauri'
 export const DEFAULT_PLAYER_SCRIPT = `import str;
 
 fn on_ready(name: String, x: Float, y: Float): Int {
-    print("[ready]");
+    print("[ready] Player — arrows/WASD move, Space jump, Q destroy Coin");
     print("strata:play_sound name=jump.wav");
+    print("strata:spawn name=Orb kind=sprite x=80 y=-20 w=24 h=24 color=#61afef script=CoinSpin.rg");
     return 0;
 }
 
@@ -18,8 +19,17 @@ fn on_update(name: String, x: Float, y: Float, dt: Float, keys: String): Int {
     if str.contains(keys, "ArrowLeft") || str.contains(keys, "KeyA") {
         print("strata:move dx=-3 dy=0");
     }
+    if str.contains(keys, "ArrowUp") || str.contains(keys, "KeyW") {
+        print("strata:move dx=0 dy=-3");
+    }
+    if str.contains(keys, "ArrowDown") || str.contains(keys, "KeyS") {
+        print("strata:move dx=0 dy=3");
+    }
     if str.contains(keys, "Space") {
         print("strata:play_sound name=jump.wav");
+    }
+    if str.contains(keys, "KeyQ") {
+        print("strata:destroy name=Coin");
     }
     return 0;
 }
@@ -30,8 +40,7 @@ fn main(): Int {
 `
 
 export const DEFAULT_COIN_SCRIPT = `fn on_ready(name: String, x: Float, y: Float): Int {
-    print("[ready] coin");
-    print(name);
+    print(f"[ready] {name}");
     return 0;
 }
 

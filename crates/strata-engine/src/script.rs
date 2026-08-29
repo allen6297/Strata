@@ -1,10 +1,13 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use rosegold::{EvalContext, FileModuleResolver, Lexer, Parser, Value};
 
 use crate::scene::Entity;
 use crate::world::World;
+
+static SPAWN_SEQ: AtomicU64 = AtomicU64::new(1);
 
 /// Language / script runtime attached to a [`World`].
 pub trait ScriptHost {
@@ -42,6 +45,8 @@ pub enum StrataDirective {
     width: f32,
     height: f32,
     color: String,
+    /// Optional script asset name to attach (stored on `script_path`)
+    script: Option<String>,
   },
   Destroy {
     entity_id: String,
@@ -62,6 +67,12 @@ pub struct RoseGoldScriptHost {
   pub last_stdout: String,
   /// Directives from the last tick that the host could not apply locally (e.g. play_sound)
   pub last_side_effects: Vec<StrataDirective>,
+  /// True if any hook failed during the last load/tick
+  pub last_had_error: bool,
+  /// Script sources keyed by asset/script name (for spawn `script=…`)
+  script_library: HashMap<String, String>,
+  /// Entity ids that received a script via spawn this directive pass
+  pending_spawn_ready: Vec<String>,
 }
 
 impl Default for RoseGoldScriptHost {
@@ -78,6 +89,9 @@ impl RoseGoldScriptHost {
       keys: String::new(),
       last_stdout: String::new(),
       last_side_effects: Vec::new(),
+      last_had_error: false,
+      script_library: HashMap::new(),
+      pending_spawn_ready: Vec::new(),
     }
   }
 
@@ -89,8 +103,17 @@ impl RoseGoldScriptHost {
     self.scripts.insert(entity_id.into(), source.into());
   }
 
+  /// Register a named script source so `strata:spawn script=Name` can attach it.
+  pub fn register_script(&mut self, name: impl Into<String>, source: impl Into<String>) {
+    let name = name.into();
+    let source = source.into();
+    let key = name.to_lowercase();
+    self.script_library.insert(key, source);
+  }
+
   pub fn clear_scripts(&mut self) {
     self.scripts.clear();
+    self.script_library.clear();
   }
 
   pub fn set_keys(&mut self, keys: impl Into<String>) {
@@ -137,7 +160,7 @@ impl RoseGoldScriptHost {
     Ok((stdout, directives))
   }
 
-  fn apply_directives(world: &mut World, directives: &[StrataDirective]) -> Vec<StrataDirective> {
+  fn apply_directives(&mut self, world: &mut World, directives: &[StrataDirective]) -> Vec<StrataDirective> {
     let mut side_effects = Vec::new();
     for d in directives {
       match d {
@@ -180,12 +203,11 @@ impl RoseGoldScriptHost {
           width,
           height,
           color,
+          script,
           ..
         } => {
-          let id = format!(
-            "spawn_{}",
-            world.entities().len() + 1 + (x * 1000.0) as i32 as usize
-          );
+          let seq = SPAWN_SEQ.fetch_add(1, Ordering::Relaxed);
+          let id = format!("spawn_{seq}");
           let kind = match kind.to_lowercase().as_str() {
             "mesh" => crate::scene::EntityKind::Mesh,
             "empty" => crate::scene::EntityKind::Empty,
@@ -194,8 +216,9 @@ impl RoseGoldScriptHost {
             "script" => crate::scene::EntityKind::Script,
             _ => crate::scene::EntityKind::Sprite,
           };
+          let script_path = script.clone().unwrap_or_default();
           let mut e = Entity {
-            id,
+            id: id.clone(),
             name: name.clone(),
             kind,
             parent_id: None,
@@ -215,12 +238,22 @@ impl RoseGoldScriptHost {
             color: color.clone(),
             visible: true,
             locked: false,
-            script_path: String::new(),
+            script_path: script_path.clone(),
             mesh_primitive: Default::default(),
             light_kind: Default::default(),
           };
           e.sync_rotation_alias();
           world.entities_mut().push(e);
+          if let Some(script_name) = script {
+            if let Some(source) = self
+              .script_library
+              .get(&script_name.to_lowercase())
+              .cloned()
+            {
+              self.scripts.insert(id.clone(), source);
+              self.pending_spawn_ready.push(id);
+            }
+          }
         }
         StrataDirective::Destroy {
           entity_id,
@@ -244,12 +277,39 @@ impl RoseGoldScriptHost {
     }
     side_effects
   }
+  fn run_pending_spawn_ready(&mut self, world: &mut World) {
+    let ids = std::mem::take(&mut self.pending_spawn_ready);
+    for id in ids {
+      let Some(entity) = world.entities().iter().find(|e| e.id == id).cloned() else {
+        continue;
+      };
+      match self.run_hook(&entity, "on_ready", 0.0) {
+        Ok((out, dirs)) => {
+          self.last_stdout.push_str(&out);
+          let side = self.apply_directives(world, &dirs);
+          self.last_side_effects.extend(side);
+        }
+        Err(err) => {
+          self.last_had_error = true;
+          self
+            .last_stdout
+            .push_str(&format!("[script error {}] {}\n", entity.name, err));
+        }
+      }
+    }
+    // Nested spawns from on_ready
+    if !self.pending_spawn_ready.is_empty() {
+      self.run_pending_spawn_ready(world);
+    }
+  }
 }
 
 impl ScriptHost for RoseGoldScriptHost {
   fn on_load(&mut self, world: &mut World) {
     self.last_stdout.clear();
     self.last_side_effects.clear();
+    self.last_had_error = false;
+    self.pending_spawn_ready.clear();
     let entities: Vec<Entity> = world.entities().to_vec();
     for e in entities {
       if !self.scripts.contains_key(&e.id) {
@@ -258,19 +318,23 @@ impl ScriptHost for RoseGoldScriptHost {
       match self.run_hook(&e, "on_ready", 0.0) {
         Ok((out, dirs)) => {
           self.last_stdout.push_str(&out);
-          let side = Self::apply_directives(world, &dirs);
+          let side = self.apply_directives(world, &dirs);
           self.last_side_effects.extend(side);
         }
         Err(err) => {
+          self.last_had_error = true;
           self.last_stdout.push_str(&format!("[script error {}] {}\n", e.name, err));
         }
       }
     }
+    self.run_pending_spawn_ready(world);
   }
 
   fn on_update(&mut self, world: &mut World, dt: f32) {
     self.last_stdout.clear();
     self.last_side_effects.clear();
+    self.last_had_error = false;
+    self.pending_spawn_ready.clear();
     let entities: Vec<Entity> = world.entities().to_vec();
     for e in entities {
       if e.locked || !self.scripts.contains_key(&e.id) {
@@ -279,14 +343,16 @@ impl ScriptHost for RoseGoldScriptHost {
       match self.run_hook(&e, "on_update", dt) {
         Ok((out, dirs)) => {
           self.last_stdout.push_str(&out);
-          let side = Self::apply_directives(world, &dirs);
+          let side = self.apply_directives(world, &dirs);
           self.last_side_effects.extend(side);
         }
         Err(err) => {
+          self.last_had_error = true;
           self.last_stdout.push_str(&format!("[script error {}] {}\n", e.name, err));
         }
       }
     }
+    self.run_pending_spawn_ready(world);
   }
 }
 
@@ -450,6 +516,7 @@ pub fn parse_strata_directives(stdout: &str, entity_id: &str) -> Vec<StrataDirec
             .get("color")
             .cloned()
             .unwrap_or_else(|| "#61afef".into()),
+          script: kv.get("script").cloned(),
         });
       }
       "destroy" => {
@@ -572,14 +639,58 @@ fn on_ready(name: String, x: Float, y: Float): Int {
   }
 
   #[test]
+  fn host_spawn_with_script_library() {
+    let scene = SceneFile {
+      version: 2,
+      name: "test".into(),
+      mode: Mode::D2,
+      entities: vec![entity("e1", "Hero", 0.0, 0.0)],
+    };
+    let mut world = World::from_scene(scene);
+    let mut host = RoseGoldScriptHost::new();
+    host.register_script(
+      "CoinSpin.rg",
+      r#"
+fn on_ready(name: String, x: Float, y: Float): Int {
+    print("orb-ready");
+    return 0;
+}
+fn on_update(name: String, x: Float, y: Float, dt: Float): Int {
+    print("strata:rot 1");
+    return 0;
+}
+"#,
+    );
+    host.set_script(
+      "e1",
+      r#"
+fn on_ready(name: String, x: Float, y: Float): Int {
+    print("strata:spawn name=Orb x=1 y=2 script=CoinSpin.rg");
+    return 0;
+}
+"#,
+    );
+    world.load(&mut host);
+    assert!(world.entities().iter().any(|e| e.name == "Orb"));
+    assert!(host.last_stdout.contains("orb-ready"));
+    world.tick(0.016, &mut host);
+    let orb = world.entities().iter().find(|e| e.name == "Orb").unwrap();
+    assert!(orb.rotation_z.abs() > 0.0);
+  }
+
+  #[test]
   fn parse_spawn_and_destroy() {
     let d = parse_strata_directives(
-      "strata:spawn name=Orb x=1 y=2 w=8 h=8\nstrata:destroy name=Foe\n",
+      "strata:spawn name=Orb x=1 y=2 w=8 h=8 script=CoinSpin.rg\nstrata:destroy name=Foe\n",
       "e1",
     );
     assert!(matches!(
       &d[0],
-      StrataDirective::Spawn { name, x, y, .. } if name == "Orb" && (*x - 1.0).abs() < 0.001 && (*y - 2.0).abs() < 0.001
+      StrataDirective::Spawn { name, x, y, script, .. }
+        if name == "Orb"
+          && (*x - 1.0).abs() < 0.001
+          && (*y - 2.0).abs() < 0.001
+          && script.as_deref() == Some("CoinSpin.rg")
     ));
     assert_eq!(
       d[1],

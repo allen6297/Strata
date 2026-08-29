@@ -14,6 +14,9 @@ export default defineConfig({
     },
   },
   envPrefix: ['VITE_', 'TAURI_ENV_*'],
+  optimizeDeps: {
+    exclude: ['@/wasm/rosegold/rosegold_wasm.js'],
+  },
   server: {
     host: host || '0.0.0.0',
     port: 4521,

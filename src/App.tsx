@@ -37,6 +37,7 @@ import {
 import { isTauri, openSceneFile, saveSceneFile } from '@/lib/desktop'
 import {
   collectEntityScripts,
+  engineClearPlay,
   engineLoadScene,
   engineSetKeys,
   engineSetScripts,
@@ -44,6 +45,7 @@ import {
   engineTick,
   mergeEngineEntities,
 } from '@/lib/engine'
+import { runRoseGoldWasm } from '@/lib/rosegold-wasm'
 import { loadDockLayout, type DockZoneId, type PanelId } from '@/lib/dock-layout'
 import {
   createDefaultEntities,
@@ -185,6 +187,7 @@ export default function App() {
   const statusTimer = useRef<number | null>(null)
   const entitiesRefForPlay = useRef(entities)
   const scriptsRefForPlay = useRef(scripts)
+  const scriptBindKeyRef = useRef('')
   entitiesRefForPlay.current = entities
   scriptsRefForPlay.current = scripts
 
@@ -583,11 +586,15 @@ export default function App() {
     if (playing) {
       setPlaying(false)
       discardTransient()
+      if (isTauri()) {
+        await engineClearPlay()
+      }
       flashStatus('Stopped')
       return
     }
     beginTransient()
     setPlaying(true)
+    scriptBindKeyRef.current = ''
     flashStatus('Playing…')
 
     // Desktop: RoseGoldScriptHost runs on_ready via engine_load_scene.
@@ -600,7 +607,7 @@ export default function App() {
       )
       if (frame) {
         applyTransient(() =>
-          mergeEngineEntities(entities, frame.scene.entities),
+          mergeEngineEntities(entities, frame.scene.entities, scripts),
         )
         runSideEffects(engineSideEffectsToRuntime(frame.sideEffects))
         const chunks = [
@@ -611,17 +618,26 @@ export default function App() {
           'Live on_update running…',
         ].filter(Boolean)
         setPlayLog(chunks.join('\n\n'))
+        if (frame.hadError) {
+          flashStatus('Script error — see play log')
+        } else {
+          flashStatus('on_ready ok')
+        }
       } else {
         setPlayLog('Engine load failed')
         flashStatus('Engine load failed')
       }
-      flashStatus('on_ready ok')
       return
     }
 
-    // Browser: preview / hook path (no native interpreter).
+    // Browser: WASM interpreter when available, else directive preview.
     const jobs = collectReadyJobs(entities, scripts)
-    const result = await runRoseGoldHooks(jobs)
+    let result = await runRoseGoldWasm(
+      jobs.map((j) => ({ label: j.label, source: j.source })),
+    )
+    if (!result) {
+      result = await runRoseGoldHooks(jobs)
+    }
     let readyDirectives = parseStrataDirectives(result.stdout, jobs)
     if (!result.ok || !readyDirectives.length) {
       readyDirectives = previewReadyDirectives(entities, scripts)
@@ -635,8 +651,11 @@ export default function App() {
       applyTransient(() => next)
       runSideEffects(sideEffects)
     }
+    const backend = result.message.includes('wasm')
+      ? 'WASM RoseGold'
+      : 'Browser preview'
     const chunks = [
-      result.message,
+      `${backend}: ${result.message}`,
       result.stdout && `stdout:\n${result.stdout}`,
       result.stderr && `stderr:\n${result.stderr}`,
       'Live on_update running…',
@@ -678,9 +697,25 @@ export default function App() {
               await engineSetKeys(runtimeInput.keysCsv())
               const frame = await engineTick(dt)
               if (cancelled || !frame) return
-              applyTransient((prev) =>
-                mergeEngineEntities(prev, frame.scene.entities),
+              const nextEntities = mergeEngineEntities(
+                entitiesRefForPlay.current,
+                frame.scene.entities,
+                scriptsRefForPlay.current,
               )
+              applyTransient(() => nextEntities)
+              // Re-bind only when the set of scripted entities changes (e.g. spawn)
+              const bindings = collectEntityScripts(
+                nextEntities,
+                scriptsRefForPlay.current,
+              )
+              const bindKey = bindings
+                .map((b) => b.entityId)
+                .sort()
+                .join(',')
+              if (bindKey !== scriptBindKeyRef.current) {
+                scriptBindKeyRef.current = bindKey
+                await engineSetScripts(bindings)
+              }
               runSideEffects(engineSideEffectsToRuntime(frame.sideEffects))
               const line = frame.stdout.trim()
               if (line) {
@@ -688,6 +723,9 @@ export default function App() {
                   const next = `${prev}\n\n--- engine ---\n${line}`
                   return next.length > 8000 ? next.slice(-8000) : next
                 })
+              }
+              if (frame.hadError) {
+                flashStatus('Script error — see play log')
               }
             } finally {
               busy = false
@@ -728,7 +766,10 @@ export default function App() {
         return
       }
 
-      const result = await runRoseGoldHooks(jobs)
+      const result =
+        (await runRoseGoldWasm(
+          jobs.map((j) => ({ label: j.label, source: j.source })),
+        )) ?? (await runRoseGoldHooks(jobs))
       if (cancelled) return
 
       let directives = parseStrataDirectives(result.stdout, jobs)

@@ -56,6 +56,7 @@ struct EngineFrame {
   scene: SceneFile,
   stdout: String,
   side_effects: Vec<EngineSideEffect>,
+  had_error: bool,
 }
 
 #[derive(Serialize)]
@@ -326,6 +327,9 @@ fn engine_info() -> EngineInfo {
 struct EntityScript {
   entity_id: String,
   source: String,
+  /// Optional asset/script name for spawn `script=…` lookup
+  #[serde(default)]
+  name: Option<String>,
 }
 
 #[tauri::command]
@@ -333,8 +337,22 @@ fn engine_set_scripts(scripts: Vec<EntityScript>, state: State<EngineState>) -> 
   let mut host = state.host.lock().map_err(|e| e.to_string())?;
   host.clear_scripts();
   for s in scripts {
+    if let Some(name) = s.name.as_ref().filter(|n| !n.is_empty()) {
+      host.register_script(name, s.source.clone());
+    }
+    if s.entity_id.starts_with("__lib_") {
+      continue;
+    }
     host.set_script(s.entity_id, s.source);
   }
+  Ok(())
+}
+
+#[tauri::command]
+fn engine_clear_play(state: State<EngineState>) -> Result<(), String> {
+  let mut host = state.host.lock().map_err(|e| e.to_string())?;
+  host.clear_scripts();
+  host.set_keys(String::new());
   Ok(())
 }
 
@@ -355,6 +373,7 @@ fn engine_load_scene(scene: SceneFile, state: State<EngineState>) -> Result<Engi
     scene: world.to_scene(),
     stdout: host.last_stdout.clone(),
     side_effects: side_effects_from_host(&host),
+    had_error: host.last_had_error,
   })
 }
 
@@ -373,6 +392,7 @@ fn engine_tick(dt: f32, state: State<EngineState>) -> Result<EngineFrame, String
     scene: world.to_scene(),
     stdout: host.last_stdout.clone(),
     side_effects: side_effects_from_host(&host),
+    had_error: host.last_had_error,
   })
 }
 
@@ -391,6 +411,7 @@ pub fn run() {
       engine_info,
       engine_set_scripts,
       engine_set_keys,
+      engine_clear_play,
       engine_load_scene,
       engine_snapshot,
       engine_tick

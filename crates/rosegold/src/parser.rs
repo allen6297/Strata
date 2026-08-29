@@ -41,6 +41,7 @@ pub struct FnDecl {
   pub params: Vec<Param>,
   pub return_type: Option<Type>,
   pub body: Block,
+  pub is_test: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -240,8 +241,12 @@ impl Parser {
 
   fn parse_item(&mut self) -> Result<Item, String> {
     // Optional attributes: @test, @something(...)
+    let mut is_test = false;
     while self.consume(TokenKind::At) {
-      let _ = self.expect_ident("expected attribute name after '@'")?;
+      let attr = self.expect_ident("expected attribute name after '@'")?;
+      if attr == "test" {
+        is_test = true;
+      }
       if self.consume(TokenKind::LParen) {
         let mut depth = 1;
         while depth > 0 && !self.at(TokenKind::Eof) {
@@ -258,7 +263,11 @@ impl Parser {
     let _ = self.consume(TokenKind::Pub);
     match self.peek() {
       TokenKind::Import | TokenKind::From => Ok(Item::Import(self.parse_import()?)),
-      TokenKind::Fn => Ok(Item::FnDecl(self.parse_fn_decl()?)),
+      TokenKind::Fn => {
+        let mut decl = self.parse_fn_decl()?;
+        decl.is_test = is_test;
+        Ok(Item::FnDecl(decl))
+      }
       TokenKind::Var => Ok(Item::VarDecl(self.parse_var_decl()?)),
       TokenKind::Const => Ok(Item::ConstDecl(self.parse_const_decl()?)),
       TokenKind::Struct => Ok(Item::StructDecl(self.parse_struct_decl()?)),
@@ -408,7 +417,13 @@ impl Parser {
       None
     };
     let body = self.parse_block()?;
-    Ok(FnDecl { name, params, return_type, body })
+    Ok(FnDecl {
+      name,
+      params,
+      return_type,
+      body,
+      is_test: false,
+    })
   }
 
   fn parse_params(&mut self) -> Result<Vec<Param>, String> {
