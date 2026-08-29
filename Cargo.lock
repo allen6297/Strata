@@ -2970,6 +2970,7 @@ dependencies = [
 name = "strata-engine"
 version = "0.1.0"
 dependencies = [
+ "rosegold",
  "serde",
  "serde_json",
 ]

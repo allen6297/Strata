@@ -6,6 +6,7 @@ pub enum Item {
   ConstDecl(ConstDecl),
   StructDecl(StructDecl),
   EnumDecl(EnumDecl),
+  ImplDecl { type_name: String, methods: Vec<FnDecl> },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -235,11 +236,24 @@ impl Parser {
       TokenKind::Const => Ok(Item::ConstDecl(self.parse_const_decl()?)),
       TokenKind::Struct => Ok(Item::StructDecl(self.parse_struct_decl()?)),
       TokenKind::Enum => Ok(Item::EnumDecl(self.parse_enum_decl()?)),
+      TokenKind::Impl => Ok(self.parse_impl_decl()?),
       _ => {
         let t = &self.tokens[self.pos];
         Err(format!("expected top-level item at {}:{}", t.span.line, t.span.col))
       }
     }
+  }
+
+  fn parse_impl_decl(&mut self) -> Result<Item, String> {
+    self.advance(); // impl
+    let type_name = self.expect_ident("expected type name after impl")?;
+    self.expect(TokenKind::LBrace, "expected '{' after impl type name")?;
+    let mut methods = Vec::new();
+    while !self.at(TokenKind::RBrace) && !self.at(TokenKind::Eof) {
+      methods.push(self.parse_fn_decl()?);
+    }
+    self.expect(TokenKind::RBrace, "expected '}' after impl body")?;
+    Ok(Item::ImplDecl { type_name, methods })
   }
 
   fn parse_struct_decl(&mut self) -> Result<StructDecl, String> {
@@ -345,10 +359,19 @@ impl Parser {
       return Ok(params);
     }
     loop {
-      let name = self.expect_ident("expected parameter name")?;
-      self.expect(TokenKind::Colon, "expected ':' after parameter name")?;
-      let ty = self.parse_type()?;
-      params.push(Param { name, ty });
+      if self.consume(TokenKind::Self_) {
+        let ty = if self.consume(TokenKind::Colon) {
+          self.parse_type()?
+        } else {
+          Type { name: "Self".to_string(), args: Vec::new(), optional: false }
+        };
+        params.push(Param { name: "self".to_string(), ty });
+      } else {
+        let name = self.expect_ident("expected parameter name")?;
+        self.expect(TokenKind::Colon, "expected ':' after parameter name")?;
+        let ty = self.parse_type()?;
+        params.push(Param { name, ty });
+      }
       if !self.consume(TokenKind::Comma) {
         break;
       }
@@ -752,7 +775,15 @@ impl Parser {
       TokenKind::True => Ok(Self::expr(ExprKind::Literal(Literal::Bool(true)), span)),
       TokenKind::False => Ok(Self::expr(ExprKind::Literal(Literal::Bool(false)), span)),
       TokenKind::None => Ok(Self::expr(ExprKind::Literal(Literal::None), span)),
+      TokenKind::Self_ => Ok(Self::expr(ExprKind::Ident("self".to_string()), span)),
       TokenKind::Ident(name) => Ok(Self::expr(ExprKind::Ident(name), span)),
+      TokenKind::Array => Ok(Self::expr(ExprKind::Ident("Array".to_string()), span)),
+      TokenKind::Map => Ok(Self::expr(ExprKind::Ident("Map".to_string()), span)),
+      TokenKind::Int => Ok(Self::expr(ExprKind::Ident("Int".to_string()), span)),
+      TokenKind::Float => Ok(Self::expr(ExprKind::Ident("Float".to_string()), span)),
+      TokenKind::StringType => Ok(Self::expr(ExprKind::Ident("String".to_string()), span)),
+      TokenKind::Bool => Ok(Self::expr(ExprKind::Ident("Bool".to_string()), span)),
+      TokenKind::Void => Ok(Self::expr(ExprKind::Ident("Void".to_string()), span)),
       TokenKind::LParen => {
         let expr = self.parse_expr()?;
         self.expect(TokenKind::RParen, "expected ')' after expression")?;

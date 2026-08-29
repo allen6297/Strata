@@ -7,3 +7,4 @@ description = "Strata 2D/3D scene runtime (custom engine core)"
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+rosegold = { path = "../rosegold" }

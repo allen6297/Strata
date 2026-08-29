@@ -1,6 +1,7 @@
 pub mod interpreter;
 pub mod lexer;
 pub mod parser;
+pub mod typecheck;
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -10,6 +11,7 @@ use std::cell::RefCell;
 pub use interpreter::{EvalContext, FileModuleResolver, HashMapResolver, Module, ModuleResolver, Value};
 pub use lexer::{Lexer, Token, TokenKind};
 pub use parser::{Block, EnumDecl, EnumVariant, Expr, FnDecl, Item, Literal, Parser, Stmt, StructDecl, Type};
+pub use typecheck::typecheck;
 
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct Span {
@@ -67,6 +69,14 @@ fn run_with_context(source: &str, ctx: &mut EvalContext) -> RunResult {
       }
     }
   };
+  if let Err(e) = typecheck::typecheck(&program) {
+    return RunResult {
+      ok: false,
+      stdout: String::new(),
+      stderr: e.clone(),
+      message: e,
+    };
+  }
   match ctx.run(&program) {
     Ok(_) => RunResult {
       ok: true,
@@ -640,5 +650,113 @@ fn main(): Int {
     assert!(out.contains("5"));
     assert!(out.contains("2"));
     assert!(out.contains("3"));
+  }
+
+  #[test]
+  fn impl_method_call_on_struct() {
+    let out = assert_ok(
+      r#"
+struct Point {
+    x: Float,
+    y: Float,
+}
+
+impl Point {
+    fn length(self): Float {
+        return self.x;
+    }
+
+    fn scaled(self, factor: Float): Float {
+        return self.x * factor;
+    }
+}
+
+fn main(): Int {
+    var p = Point { x: 3.0, y: 4.0 };
+    print(p.length());
+    print(p.scaled(2.0));
+    return 0;
+}
+"#,
+    );
+    assert!(out.contains("3"));
+    assert!(out.contains("6"));
+  }
+
+  #[test]
+  fn typecheck_catches_wrong_arity() {
+    let result = run_source(
+      r#"
+fn add(a: Int, b: Int): Int {
+    return a + b;
+}
+
+fn main(): Int {
+    return add(1);
+}
+"#,
+    );
+    assert!(!result.ok);
+    assert!(
+      result.stderr.contains("expected 2 args") || result.stderr.contains("type error"),
+      "stderr: {}",
+      result.stderr
+    );
+  }
+
+  #[test]
+  fn io_read_write_roundtrip() {
+    use std::fs;
+    let dir = std::env::temp_dir().join("rosegold_io_test");
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("note.txt");
+    let path_str = path.to_string_lossy().replace('\\', "\\\\");
+    let source = format!(
+      r#"
+import io;
+
+fn main(): Int {{
+    var w = io.write_text("{path}", "hello rosegold");
+    print(w.is_ok());
+    var text = io.read_text("{path}");
+    print(text);
+    return 0;
+}}
+"#,
+      path = path_str
+    );
+    let out = assert_ok(&source);
+    assert!(out.contains("true"));
+    assert!(out.contains("hello rosegold"));
+  }
+
+  #[test]
+  fn array_first_last_and_str_helpers() {
+    let out = assert_ok(
+      r#"
+import str;
+
+fn main(): Int {
+    var a = [10, 20, 30];
+    print(a.first());
+    print(a.last());
+    print(a.contains(20));
+    print(a.contains(99));
+    print(Array.first(a));
+    print(str.upper("Hi"));
+    print(str.lower("Hi"));
+    print(str.trim("  yo  "));
+    return 0;
+}
+"#,
+    );
+    assert!(out.contains("10"));
+    assert!(out.contains("30"));
+    assert!(out.contains("true"));
+    assert!(out.contains("false"));
+    assert!(out.contains("HI"));
+    assert!(out.contains("hi"));
+    assert!(out.contains("yo"));
   }
 }

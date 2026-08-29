@@ -70,17 +70,17 @@ The interpreter is getting close to feature parity with the original Python vers
 
 ### 4.1 RoseGold language gaps
 
-1. **Real module import resolution** — done. `import module;` and `from module import Item;` now load `.rg` files from disk via a `ModuleResolver` (with an in-memory resolver for tests). Native stdlib modules (`str`, `math`, `checks`, `Option`, `Result`) are still wired natively but can be imported.
-2. **Structs / classes / enums with custom definitions** — done for `struct` and `enum` declarations, field access, struct literals, and enum construction/matching. User-defined methods are not supported yet.
-3. **Type checker** — type annotations are parsed and ignored at runtime. A static check phase is needed for safer scripts.
-4. **More stdlib parity** — `io` (file I/O), full `Array` module, and any remaining `str`/`math`/`checks` functions that the upstream Python examples rely on.
-5. **Full example compatibility** — the upstream RoseGold-PY examples still exercise features the Rust interpreter does not yet support. Running them one by one is the best way to find the next gaps.
+1. **Real module import resolution** — done.
+2. **Structs / enums / `impl` methods** — done (declarations, literals, field access, match, `impl Type { fn ... }`).
+3. **Type checker** — done (lenient static pass before eval; catches unknown functions and wrong arity).
+4. **More stdlib parity** — done for `io` (`read_text` / `write_text`), Array `first`/`last`/`contains`, and `str.upper`/`lower`/`trim`. Further parity can follow examples.
+5. **Full example compatibility** — ongoing; prefer porting upstream examples into `cargo test -p rosegold`.
 
 ### 4.2 Engine / editor next steps
 
-1. **Script host bridge** — the Rust engine currently uses a `NullScriptHost` stub. Wire `rosegold` into the engine so scripts can read/write scene state during `on_update`.
-2. **Remove Python fallback** — done. The vendored Python fallback and `setup-rosegold.sh` have been removed; `crates/rosegold` is the only interpreter.
-3. **Browser preview parity** — the browser preview applies RoseGold directives without the real interpreter. Decide whether to keep it as a preview-only stub or compile the Rust interpreter to WASM.
+1. **Script host bridge** — done. `RoseGoldScriptHost` in `strata-engine` runs `on_ready` / `on_update` and applies `strata:` directives to the world. Tauri exposes `engine_set_scripts` / `engine_set_keys`.
+2. **Remove Python fallback** — done.
+3. **Browser preview parity** — the browser preview still applies directives without the real interpreter. Decide whether to keep it as a preview-only stub or compile the Rust interpreter to WASM.
 
 ## 5. Running tests
 
@@ -104,8 +104,8 @@ The fastest way to extend the interpreter is to pick an upstream RoseGold-PY exa
 
 Alternatively, the next highest-impact items are:
 
-- **File-based module imports** (done) — `import module;` and `from module import item;` now work with on-disk `.rg` files.
-- **Struct/enum methods** (adds `impl` blocks or method syntax).
-- **Script host bridge** (lets scripts read and write scene state during play).
+- **Wire the editor Play loop to `engine_set_scripts` + `engine_tick`** so desktop play uses the Rust host end-to-end.
+- **Browser preview / WASM** (optional).
+- **Upstream example chase** — keep porting RoseGold-PY examples into unit tests.
 
 All recent changes are committed and pushed.

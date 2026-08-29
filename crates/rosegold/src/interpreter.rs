@@ -194,6 +194,7 @@ pub struct EvalContext {
   pub stdout: String,
   pub env: Environment,
   pub functions: HashMap<String, FnDecl>,
+  pub methods: HashMap<String, HashMap<String, FnDecl>>,
   pub stdlib: HashMap<String, HashMap<String, Value>>,
   pub structs: HashMap<String, StructDefRef>,
   pub enums: HashMap<String, EnumDefRef>,
@@ -254,6 +255,7 @@ impl EvalContext {
       stdout: String::new(),
       env: Environment::new(),
       functions: HashMap::new(),
+      methods: HashMap::new(),
       stdlib: HashMap::new(),
       structs: HashMap::new(),
       enums: HashMap::new(),
@@ -272,9 +274,14 @@ impl EvalContext {
     str_mod.insert("length".to_string(), Value::String("str.length".to_string()));
     str_mod.insert("is_empty".to_string(), Value::String("str.is_empty".to_string()));
     str_mod.insert("repeat".to_string(), Value::String("str.repeat".to_string()));
+    str_mod.insert("upper".to_string(), Value::String("str.upper".to_string()));
+    str_mod.insert("lower".to_string(), Value::String("str.lower".to_string()));
+    str_mod.insert("trim".to_string(), Value::String("str.trim".to_string()));
     self.stdlib.insert("str".to_string(), str_mod);
     self.stdlib.insert("math".to_string(), HashMap::new());
     self.stdlib.insert("checks".to_string(), HashMap::new());
+    self.stdlib.insert("io".to_string(), HashMap::new());
+    self.stdlib.insert("Array".to_string(), HashMap::new());
     self.stdlib.insert("option".to_string(), HashMap::new());
     self.stdlib.insert("Option".to_string(), HashMap::new());
     self.stdlib.insert("result".to_string(), HashMap::new());
@@ -296,6 +303,16 @@ impl EvalContext {
   }
 
   pub fn run(&mut self, program: &[Item]) -> Result<Value, RuntimeError> {
+    self.load_program(program)?;
+    if self.functions.contains_key("main") {
+      self.call_fn("main", vec![], Span::default())
+    } else {
+      Ok(Value::Void)
+    }
+  }
+
+  /// Register declarations and evaluate top-level consts/vars without calling `main`.
+  pub fn load_program(&mut self, program: &[Item]) -> Result<(), RuntimeError> {
     // First pass: register declarations
     for item in program {
       match item {
@@ -313,6 +330,12 @@ impl EvalContext {
           }
           self.enums.insert(e.name.clone(), Rc::new(EnumDef { name: e.name.clone(), variants }));
         }
+        Item::ImplDecl { type_name, methods } => {
+          let entry = self.methods.entry(type_name.clone()).or_insert_with(HashMap::new);
+          for m in methods {
+            entry.insert(m.name.clone(), m.clone());
+          }
+        }
         Item::Import(i) => {
           self.eval_import(i, Span::default())?;
         }
@@ -328,7 +351,6 @@ impl EvalContext {
           self.env.define(&c.name, value);
         }
         Item::VarDecl(v) => {
-          let _span = v.value.as_ref().map(|e| e.span).unwrap_or_default();
           let value = match &v.value {
             Some(e) => self.eval_expr(e)?,
             None => Value::None,
@@ -338,13 +360,16 @@ impl EvalContext {
         _ => {}
       }
     }
+    Ok(())
+  }
 
-    // Run main if present
-    if self.functions.contains_key("main") {
-      self.call_fn("main", vec![], Span::default())
-    } else {
-      Ok(Value::Void)
-    }
+  /// Call a registered function by name (e.g. `on_ready`, `on_update`).
+  pub fn call(&mut self, name: &str, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    self.call_fn(name, args, Span::default())
+  }
+
+  pub fn has_fn(&self, name: &str) -> bool {
+    self.functions.contains_key(name)
   }
 
   fn eval_import(&mut self, import: &Import, span: Span) -> Result<(), RuntimeError> {
@@ -899,6 +924,25 @@ impl EvalContext {
   }
 
   fn call_member(&mut self, object: &Value, name: &str, _args: Vec<Value>, span: Span) -> Result<Value, RuntimeError> {
+    // User-defined methods on structs/enums (impl blocks)
+    let type_key = match object {
+      Value::Struct { name: n, .. } => Some(n.clone()),
+      Value::Enum { module, .. } => Some(module.clone()),
+      _ => None,
+    };
+    if let Some(type_name) = type_key {
+      if let Some(type_methods) = self.methods.get(&type_name) {
+        if let Some(decl) = type_methods.get(name) {
+          let decl = decl.clone();
+          let mut args = _args;
+          if decl.params.first().map(|p| p.name == "self").unwrap_or(false) {
+            args.insert(0, object.clone());
+          }
+          return self.call_fn_decl(&decl, args, span);
+        }
+      }
+    }
+
     // Method dispatch: String, Array, Map
     match object {
       Value::String(s) => match name {
@@ -916,6 +960,25 @@ impl EvalContext {
           Ok(Value::Void)
         }
         "pop" => Ok(a.borrow_mut().pop().unwrap_or(Value::None)),
+        "first" => {
+          if !_args.is_empty() {
+            return Err(runtime_err("Array.first takes 0 arguments".to_string(), span));
+          }
+          Ok(a.borrow().first().cloned().unwrap_or(Value::None))
+        }
+        "last" => {
+          if !_args.is_empty() {
+            return Err(runtime_err("Array.last takes 0 arguments".to_string(), span));
+          }
+          Ok(a.borrow().last().cloned().unwrap_or(Value::None))
+        }
+        "contains" => {
+          if _args.len() != 1 {
+            return Err(runtime_err("Array.contains takes 1 argument".to_string(), span));
+          }
+          let found = a.borrow().iter().any(|v| value_eq(v, &_args[0]));
+          Ok(Value::Bool(found))
+        }
         _ => Err(runtime_err(format!("Array has no method '{}'", name), span)),
       },
       Value::Map(m) => match name {
@@ -1000,6 +1063,9 @@ impl EvalContext {
         }
         Err(runtime_err(format!("module has no member '{}'", name), span))
       }
+      Value::Struct { name: struct_name, .. } => {
+        Err(runtime_err(format!("struct {} has no method '{}'", struct_name, name), span))
+      }
       _ => Err(runtime_err(format!("type {} has no method '{}'", object.type_name(), name), span)),
     }
   }
@@ -1041,6 +1107,71 @@ impl EvalContext {
         let s = match &args[0] { Value::String(s) => s.clone(), _ => return Err(runtime_err("expected String".to_string(), span)) };
         let n = match &args[1] { Value::Int(n) => *n, _ => return Err(runtime_err("expected Int".to_string(), span)) };
         Ok(Value::String(s.repeat(n.max(0) as usize)))
+      }
+      ("str", "upper") => {
+        if args.len() != 1 { return Err(runtime_err("str.upper takes 1 argument".to_string(), span)); }
+        let s = match &args[0] { Value::String(s) => s.clone(), _ => return Err(runtime_err("expected String".to_string(), span)) };
+        Ok(Value::String(s.to_uppercase()))
+      }
+      ("str", "lower") => {
+        if args.len() != 1 { return Err(runtime_err("str.lower takes 1 argument".to_string(), span)); }
+        let s = match &args[0] { Value::String(s) => s.clone(), _ => return Err(runtime_err("expected String".to_string(), span)) };
+        Ok(Value::String(s.to_lowercase()))
+      }
+      ("str", "trim") => {
+        if args.len() != 1 { return Err(runtime_err("str.trim takes 1 argument".to_string(), span)); }
+        let s = match &args[0] { Value::String(s) => s.clone(), _ => return Err(runtime_err("expected String".to_string(), span)) };
+        Ok(Value::String(s.trim().to_string()))
+      }
+      ("io", "read_text") => {
+        if args.len() != 1 { return Err(runtime_err("io.read_text takes 1 argument".to_string(), span)); }
+        let path = match &args[0] { Value::String(s) => s.clone(), _ => return Err(runtime_err("io.read_text expects String path".to_string(), span)) };
+        match std::fs::read_to_string(&path) {
+          Ok(content) => Ok(Value::String(content)),
+          Err(e) => Ok(Value::Enum {
+            module: "Result".to_string(),
+            variant: "Err".to_string(),
+            value: Some(Box::new(Value::String(e.to_string()))),
+          }),
+        }
+      }
+      ("io", "write_text") => {
+        if args.len() != 2 { return Err(runtime_err("io.write_text takes 2 arguments".to_string(), span)); }
+        let path = match &args[0] { Value::String(s) => s.clone(), _ => return Err(runtime_err("io.write_text expects String path".to_string(), span)) };
+        let content = match &args[1] { Value::String(s) => s.clone(), _ => return Err(runtime_err("io.write_text expects String content".to_string(), span)) };
+        match std::fs::write(&path, content) {
+          Ok(()) => Ok(Value::Enum {
+            module: "Result".to_string(),
+            variant: "Ok".to_string(),
+            value: Some(Box::new(Value::Void)),
+          }),
+          Err(e) => Ok(Value::Enum {
+            module: "Result".to_string(),
+            variant: "Err".to_string(),
+            value: Some(Box::new(Value::String(e.to_string()))),
+          }),
+        }
+      }
+      ("Array", "first") => {
+        if args.len() != 1 { return Err(runtime_err("Array.first takes 1 argument".to_string(), span)); }
+        match &args[0] {
+          Value::Array(a) => Ok(a.borrow().first().cloned().unwrap_or(Value::None)),
+          _ => Err(runtime_err("Array.first expects Array".to_string(), span)),
+        }
+      }
+      ("Array", "last") => {
+        if args.len() != 1 { return Err(runtime_err("Array.last takes 1 argument".to_string(), span)); }
+        match &args[0] {
+          Value::Array(a) => Ok(a.borrow().last().cloned().unwrap_or(Value::None)),
+          _ => Err(runtime_err("Array.last expects Array".to_string(), span)),
+        }
+      }
+      ("Array", "contains") => {
+        if args.len() != 2 { return Err(runtime_err("Array.contains takes 2 arguments".to_string(), span)); }
+        match &args[0] {
+          Value::Array(a) => Ok(Value::Bool(a.borrow().iter().any(|v| value_eq(v, &args[1])))),
+          _ => Err(runtime_err("Array.contains expects Array".to_string(), span)),
+        }
       }
       ("math", "abs") => {
         if args.len() != 1 { return Err(runtime_err("math.abs takes 1 argument".to_string(), span)); }

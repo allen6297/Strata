@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
-use strata_engine::{NullScriptHost, SceneFile, World, ENGINE_VERSION};
+use strata_engine::{RoseGoldScriptHost, SceneFile, World, ENGINE_VERSION};
 use tauri::State;
 
 mod menu;
@@ -31,14 +31,14 @@ struct ProjectFile {
 
 pub struct EngineState {
   world: Mutex<World>,
-  host: Mutex<NullScriptHost>,
+  host: Mutex<RoseGoldScriptHost>,
 }
 
 impl Default for EngineState {
   fn default() -> Self {
     Self {
       world: Mutex::new(World::new()),
-      host: Mutex::new(NullScriptHost),
+      host: Mutex::new(RoseGoldScriptHost::new()),
     }
   }
 }
@@ -290,8 +290,32 @@ fn data_encoding_base64(bytes: &[u8]) -> String {
 fn engine_info() -> EngineInfo {
   EngineInfo {
     version: ENGINE_VERSION.into(),
-    script_host: "null".into(),
+    script_host: "rosegold".into(),
   }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct EntityScript {
+  entity_id: String,
+  source: String,
+}
+
+#[tauri::command]
+fn engine_set_scripts(scripts: Vec<EntityScript>, state: State<EngineState>) -> Result<(), String> {
+  let mut host = state.host.lock().map_err(|e| e.to_string())?;
+  host.clear_scripts();
+  for s in scripts {
+    host.set_script(s.entity_id, s.source);
+  }
+  Ok(())
+}
+
+#[tauri::command]
+fn engine_set_keys(keys: String, state: State<EngineState>) -> Result<(), String> {
+  let mut host = state.host.lock().map_err(|e| e.to_string())?;
+  host.set_keys(keys);
+  Ok(())
 }
 
 #[tauri::command]
@@ -330,6 +354,8 @@ pub fn run() {
       read_text_file,
       read_file_base64,
       engine_info,
+      engine_set_scripts,
+      engine_set_keys,
       engine_load_scene,
       engine_snapshot,
       engine_tick

@@ -29,7 +29,6 @@
   ],
   "main": "./extension.js",
   "activationEvents": [
-    "onLanguage:rosegold",
     "workspaceContains:**/*.rg"
   ],
   "contributes": {
