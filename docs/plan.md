@@ -148,6 +148,123 @@ M1 Engine play (desktop)
 
 ---
 
+## Render pipelines
+
+Planning snapshot from render pipeline discussion. **No Rust renderer exists today** — the engine owns scene data; React draws pixels.
+
+### Current state
+
+| Mode | Component | Backend | Role |
+|------|-----------|---------|------|
+| **2D** | `Viewport.tsx` | Canvas 2D | Edit + play (sprites, grid, gizmos, textures) |
+| **3D** | `EditorView.tsx` | Three.js WebGL | Edit only (orbit camera, placeholder meshes) |
+| **Engine** | — | None | `World` ticks scripts; no draw calls |
+
+**Adapter rule:** keep **separate renderers per mode** (`Viewport` for 2D, `EditorView` for 3D). Share a **scene → render description** conversion; do not merge Canvas and Three.js into one component. Remove the unused ortho-2D path in `EditorView` when cleaning up.
+
+**Editor rendering ≠ game rendering.** Long-term the game renderer may live in Rust (wgpu, TBD). The editor stays a display adapter that consumes engine snapshots.
+
+### 2D pipeline
+
+**Perf target:** ~1000 textured sprites.
+
+**Phases**
+
+| Phase | When | Executor |
+|-------|------|----------|
+| **A** | M1 engine play | Introduce `RenderFrame`; keep Canvas 2D |
+| **B** | Before perf pain (~500–1000 sprites) | WebGL2 batching (same `RenderFrame`) |
+| **C** | If/when wgpu is committed | Rust render backend; editor blits or separate window |
+
+WebGL2 batching hits the perf target without committing to wgpu embedding. wgpu remains **probable long-term, integration pattern TBD** (texture → WebView, separate game window, or viewport-only native surface).
+
+**`RenderFrame` (planning shape)**
+
+```
+World snapshot → build RenderFrame → executor (Canvas → WebGL2 → wgpu)
+                                      ↑
+                              editor overlays (gizmos, selection — edit only)
+```
+
+Stages: cull → sort (see below) → collect draw commands → execute → overlay.
+
+### Draw sort — layers + hierarchy + optional sort order
+
+Three mechanisms work together:
+
+| Mechanism | Who sets it | Role |
+|-----------|-------------|------|
+| **Layer** | Project layer list | Which group draws before/after another |
+| **Hierarchy** | User (parent/child) | Default order *within* a layer |
+| **Sort order** | User, optional | Manual override *within* a layer |
+
+**Sort pipeline**
+
+1. Sort entities by **layer order** (from project settings, low = back).
+2. Within each layer:
+   - Entities **with** `sortOrder` → sort by number ascending (low = back).
+   - Entities **without** `sortOrder` → **hierarchy** depth-first order.
+3. Draw back to front.
+
+`sortOrder` is **never auto-filled** — blank means hierarchy wins. When set, it competes **globally within that layer** (not sibling-only).
+
+### Project-defined layer list
+
+Layers are **project-scoped** (shared across scenes in a project). Scenes store `layerId` on entities, not layer name.
+
+```typescript
+interface RenderLayer {
+  id: string      // stable uuid
+  name: string    // "World", "UI", "Parallax"
+  order: number   // 0 = back, higher = front
+}
+
+interface ProjectSettings {
+  renderLayers: RenderLayer[]
+}
+
+// Entity (scene v2 — new fields)
+layerId: string       // default: project's default layer
+sortOrder?: number    // optional; user-set only
+```
+
+**New project default:** one layer named `"Default"` at order `0`.
+
+**Editing layers:** Project → Render Layers (add, rename, reorder, delete). Inspector shows a layer dropdown per entity; optional sort order field.
+
+**Edge cases**
+
+| Situation | Behavior |
+|-----------|----------|
+| Delete layer in use | Prompt to reassign entities, or block delete |
+| New entity | Assign to project default layer |
+| Old scene / missing `layerId` | Migrate to default layer on load |
+| Rename layer | Safe — entities reference `id`, not name |
+
+**Storage:** layer list in project settings JSON; `layerId` + optional `sortOrder` on entities in `.scene` v2.
+
+### 3D pipeline (placeholder track)
+
+No investment in 3D play, real lights, mesh textures, or script hooks for now.
+
+**Allowed:** orbit, select, drag, placeholder boxes/planes, scene JSON export.
+
+**Frozen until 2D engine is credible:** play mode, PBR, texture mapping, light entities → Three.js lights.
+
+Long-term 3D runtime (wgpu) is a separate decision — default stance is **editor toy only** unless explicitly reopened.
+
+### Render pipeline vs milestones
+
+```
+M1   RenderFrame type; Canvas executor; sort uses layers + hierarchy
+M2   Pull draw logic out of Viewport.tsx; snapshot drives draw list
+M3   —
+M4   WebGL2 batch executor (browser + desktop parity)
+Later  wgpu in strata-engine if committed (embedding TBD)
+```
+
+---
+
 ## Explicit “not now”
 
 - wgpu / native 3D renderer
