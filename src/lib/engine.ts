@@ -1,5 +1,6 @@
 import { invoke } from '@tauri-apps/api/core'
 import { isTauri } from '@/lib/desktop'
+import { entityDefaults } from '@/lib/scene'
 import type { AssetItem, Entity, SceneDocument } from '@/types/scene'
 import type { RuntimeSideEffect } from '@/lib/rosegold'
 
@@ -75,15 +76,41 @@ export function collectEntityScripts(
   return out
 }
 
-/** Merge engine transform fields back onto editor entities (preserve scriptId, etc.). */
+/** Merge engine entities back onto editor entities (preserve scriptId, etc.).
+ * Adds spawned entities and drops destroyed ones. */
 export function mergeEngineEntities(
   prev: Entity[],
   engineEntities: Entity[],
 ): Entity[] {
-  const byId = new Map(engineEntities.map((e) => [e.id, e]))
-  return prev.map((e) => {
-    const n = byId.get(e.id)
-    if (!n) return e
+  const prevById = new Map(prev.map((e) => [e.id, e]))
+  return engineEntities.map((n) => {
+    const e = prevById.get(n.id)
+    if (!e) {
+      return entityDefaults({
+        id: n.id,
+        name: n.name,
+        kind: n.kind,
+        x: n.x,
+        y: n.y,
+        z: n.z,
+        width: n.width,
+        height: n.height,
+        depth: n.depth,
+        rotation: n.rotationZ ?? n.rotation,
+        rotationX: n.rotationX,
+        rotationY: n.rotationY,
+        rotationZ: n.rotationZ ?? n.rotation,
+        scaleX: n.scaleX,
+        scaleY: n.scaleY,
+        scaleZ: n.scaleZ,
+        visible: n.visible,
+        locked: n.locked,
+        color: n.color,
+        scriptPath: n.scriptPath,
+        meshPrimitive: n.meshPrimitive,
+        lightKind: n.lightKind,
+      })
+    }
     return {
       ...e,
       x: n.x,
@@ -102,6 +129,8 @@ export function mergeEngineEntities(
       visible: n.visible,
       locked: n.locked,
       color: n.color,
+      name: n.name,
+      kind: n.kind,
     }
   })
 }

@@ -31,6 +31,8 @@ pub struct EnumVariant {
 pub struct Import {
   pub path: Vec<String>,
   pub alias: Option<String>,
+  /// `true` for `from module import item`, `false` for `import module.path`
+  pub is_from: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -124,7 +126,7 @@ pub struct MatchArm {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Pattern {
   Wildcard,
-  Variant { name: String, bind: Option<String> },
+  Variant { name: String, binds: Vec<String> },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -201,6 +203,14 @@ impl Parser {
     }
   }
 
+  fn at_ident(&self) -> bool {
+    matches!(self.peek(), TokenKind::Ident(_))
+  }
+
+  fn peek_kind_at(&self, offset: usize) -> Option<&TokenKind> {
+    self.tokens.get(self.pos + offset).map(|t| &t.kind)
+  }
+
   fn span(&self) -> crate::Span {
     self.tokens[self.pos].span
   }
@@ -229,6 +239,23 @@ impl Parser {
   }
 
   fn parse_item(&mut self) -> Result<Item, String> {
+    // Optional attributes: @test, @something(...)
+    while self.consume(TokenKind::At) {
+      let _ = self.expect_ident("expected attribute name after '@'")?;
+      if self.consume(TokenKind::LParen) {
+        let mut depth = 1;
+        while depth > 0 && !self.at(TokenKind::Eof) {
+          if self.at(TokenKind::LParen) {
+            depth += 1;
+          } else if self.at(TokenKind::RParen) {
+            depth -= 1;
+          }
+          self.advance();
+        }
+      }
+    }
+    // Optional visibility — currently ignored (everything is effectively public)
+    let _ = self.consume(TokenKind::Pub);
     match self.peek() {
       TokenKind::Import | TokenKind::From => Ok(Item::Import(self.parse_import()?)),
       TokenKind::Fn => Ok(Item::FnDecl(self.parse_fn_decl()?)),
@@ -250,6 +277,7 @@ impl Parser {
     self.expect(TokenKind::LBrace, "expected '{' after impl type name")?;
     let mut methods = Vec::new();
     while !self.at(TokenKind::RBrace) && !self.at(TokenKind::Eof) {
+      let _ = self.consume(TokenKind::Pub);
       methods.push(self.parse_fn_decl()?);
     }
     self.expect(TokenKind::RBrace, "expected '}' after impl body")?;
@@ -279,15 +307,45 @@ impl Parser {
   fn parse_enum_decl(&mut self) -> Result<EnumDecl, String> {
     self.advance(); // enum
     let name = self.expect_ident("expected enum name")?;
+    // Optional type parameters: Result<T, E> — ignored by the runtime
+    if self.consume(TokenKind::Lt) {
+      let mut depth = 1;
+      while depth > 0 && !self.at(TokenKind::Eof) {
+        if self.at(TokenKind::Lt) {
+          depth += 1;
+        } else if self.at(TokenKind::Gt) {
+          depth -= 1;
+        }
+        self.advance();
+      }
+    }
     self.expect(TokenKind::LBrace, "expected '{' before enum variants")?;
     let mut variants = Vec::new();
     if !self.at(TokenKind::RBrace) {
       loop {
+        // Allow `pub` on variants (ignored)
+        let _ = self.consume(TokenKind::Pub);
+        // Skip nested methods like `fn is_ok()` inside enum bodies from PY stdlib
+        if self.at(TokenKind::Fn) {
+          let _ = self.parse_fn_decl()?;
+          let _ = self.consume(TokenKind::Comma);
+          if self.at(TokenKind::RBrace) {
+            break;
+          }
+          continue;
+        }
         let variant_name = self.expect_ident("expected variant name")?;
         let mut value_types = Vec::new();
         if self.consume(TokenKind::LParen) {
           if !self.at(TokenKind::RParen) {
             loop {
+              // Named field: radius: Float  OR  bare type: Float
+              if self.at_ident()
+                && matches!(self.peek_kind_at(1), Some(TokenKind::Colon))
+              {
+                let _ = self.expect_ident("expected field name")?;
+                self.expect(TokenKind::Colon, "expected ':' after field name")?;
+              }
               value_types.push(self.parse_type()?);
               if !self.consume(TokenKind::Comma) || self.at(TokenKind::RParen) {
                 break;
@@ -321,7 +379,7 @@ impl Parser {
         None
       };
       self.expect(TokenKind::Semicolon, "expected ';' after import")?;
-      return Ok(Import { path, alias });
+      return Ok(Import { path, alias, is_from: true });
     }
     self.advance(); // import
     let first = self.expect_ident("expected module name")?;
@@ -335,7 +393,7 @@ impl Parser {
       None
     };
     self.expect(TokenKind::Semicolon, "expected ';' after import")?;
-    Ok(Import { path, alias })
+    Ok(Import { path, alias, is_from: false })
   }
 
   fn parse_fn_decl(&mut self) -> Result<FnDecl, String> {
@@ -852,17 +910,36 @@ impl Parser {
   }
 
   fn parse_pattern(&mut self) -> Result<Pattern, String> {
-    let name = self.expect_pattern_name()?;
+    let mut name = self.expect_pattern_name()?;
     if name == "_" {
       return Ok(Pattern::Wildcard);
     }
-    if self.consume(TokenKind::LParen) {
-      let inner = self.expect_pattern_name()?;
-      self.expect(TokenKind::RParen, "expected ')' after pattern binding")?;
-      let bind = if inner == "_" { None } else { Some(inner) };
-      return Ok(Pattern::Variant { name, bind });
+    // Allow qualified patterns: Shape.Circle(radius)
+    while self.consume(TokenKind::Dot) {
+      name = self.expect_pattern_name()?;
     }
-    Ok(Pattern::Variant { name, bind: None })
+    if self.consume(TokenKind::LParen) {
+      let mut binds = Vec::new();
+      if !self.at(TokenKind::RParen) {
+        loop {
+          let inner = self.expect_pattern_name()?;
+          if inner != "_" {
+            binds.push(inner);
+          } else {
+            binds.push("_".to_string());
+          }
+          if !self.consume(TokenKind::Comma) || self.at(TokenKind::RParen) {
+            break;
+          }
+        }
+      }
+      self.expect(TokenKind::RParen, "expected ')' after pattern binding")?;
+      return Ok(Pattern::Variant { name, binds });
+    }
+    Ok(Pattern::Variant {
+      name,
+      binds: Vec::new(),
+    })
   }
 
   fn expect_pattern_name(&mut self) -> Result<String, String> {

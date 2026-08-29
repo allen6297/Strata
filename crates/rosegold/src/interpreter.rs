@@ -44,13 +44,19 @@ impl FileModuleResolver {
 
 impl ModuleResolver for FileModuleResolver {
   fn resolve(&self, name: &str) -> Option<String> {
-    let path = self.base.join(format!("{}.rg", name));
-    if path.exists() {
-      return std::fs::read_to_string(path).ok();
-    }
-    let path = self.base.join(name).join("main.rg");
-    if path.exists() {
-      return std::fs::read_to_string(path).ok();
+    let dotted = name.replace('.', std::path::MAIN_SEPARATOR_STR);
+    let candidates = [
+      self.base.join(format!("{}.rg", name)),
+      self.base.join(format!("{}.rg", dotted)),
+      self.base.join(&dotted).join("lib.rg"),
+      self.base.join(&dotted).join("main.rg"),
+      self.base.join(name).join("lib.rg"),
+      self.base.join(name).join("main.rg"),
+    ];
+    for path in &candidates {
+      if path.exists() {
+        return std::fs::read_to_string(path).ok();
+      }
     }
     None
   }
@@ -200,6 +206,8 @@ pub struct EvalContext {
   pub enums: HashMap<String, EnumDefRef>,
   module_resolver: Rc<RefCell<dyn ModuleResolver>>,
   loaded_modules: Rc<RefCell<HashMap<String, ModuleRef>>>,
+  /// Set when `return` runs inside a `match` expression so the enclosing function exits.
+  pending_return: Option<Value>,
 }
 
 pub struct Environment {
@@ -261,6 +269,7 @@ impl EvalContext {
       enums: HashMap::new(),
       module_resolver: resolver,
       loaded_modules: Rc::new(RefCell::new(HashMap::new())),
+      pending_return: None,
     };
     ctx.init_stdlib();
     ctx
@@ -378,42 +387,90 @@ impl EvalContext {
     }
     let module_name = &import.path[0];
 
-    // Native stdlib modules (str, math, checks, option, Option, result, Result) are already
-    // wired via call_qualified. Importing them is a no-op; from-imports bind a native function
-    // value that delegates to call_qualified when called.
+    // Native stdlib modules are already wired via call_qualified / enums.
     if self.stdlib.contains_key(module_name) {
       if import.path.len() == 1 {
         // import module; — no-op for native stdlib modules
-      } else if import.path.len() == 2 {
+      } else if import.is_from && import.path.len() == 2 {
         let item_name = &import.path[1];
         let alias = import.alias.as_ref().unwrap_or(item_name).clone();
-        self.env.define(&alias, Value::NativeFn { module: module_name.clone(), name: item_name.clone() });
+        if let Some(e) = self.enums.get(item_name).cloned() {
+          self.env.define(&alias, Value::EnumType(e));
+        } else if let Some(e) = self.enums.get(module_name).cloned() {
+          // from option import Option / from result import Result
+          self.env.define(&alias, Value::EnumType(e));
+        } else {
+          self.env.define(
+            &alias,
+            Value::NativeFn {
+              module: module_name.clone(),
+              name: item_name.clone(),
+            },
+          );
+        }
+      } else if !import.is_from && import.path.len() >= 2 {
+        // import option.something — treat like from-import of last segment when stdlib
+        let item_name = import.path.last().unwrap();
+        let alias = import.alias.as_ref().unwrap_or(item_name).clone();
+        if let Some(e) = self.enums.get(item_name).cloned() {
+          self.env.define(&alias, Value::EnumType(e));
+        } else {
+          self.env.define(
+            &alias,
+            Value::NativeFn {
+              module: module_name.clone(),
+              name: item_name.clone(),
+            },
+          );
+        }
       } else {
-        return Err(runtime_err(format!("nested imports longer than 2 segments are not supported: {:?}", import.path), span));
+        return Err(runtime_err(
+          format!("unsupported stdlib import: {:?}", import.path),
+          span,
+        ));
       }
       return Ok(());
     }
 
-    let module = self.load_module(module_name, span)?;
-    if import.path.len() == 1 {
-      // import module;
-      let name = import.alias.as_ref().unwrap_or(module_name);
-      self.env.define(name, Value::Module(module));
-    } else if import.path.len() == 2 {
-      // from module import item;
-      let item_name = &import.path[1];
-      let m = module.borrow();
-      let alias = import.alias.as_ref().unwrap_or(item_name).clone();
-      if let Some(decl) = m.functions.get(item_name) {
-        self.functions.insert(alias.clone(), decl.clone());
-      } else if let Some(value) = m.values.get(item_name) {
-        self.env.define(&alias, value.clone());
+    if import.is_from {
+      let module = self.load_module(module_name, span)?;
+      if import.path.len() == 1 {
+        let name = import.alias.as_ref().unwrap_or(module_name);
+        self.env.define(name, Value::Module(module));
+      } else if import.path.len() == 2 {
+        let item_name = &import.path[1];
+        let m = module.borrow();
+        let alias = import.alias.as_ref().unwrap_or(item_name).clone();
+        if let Some(decl) = m.functions.get(item_name) {
+          self.functions.insert(alias.clone(), decl.clone());
+        } else if let Some(value) = m.values.get(item_name) {
+          self.env.define(&alias, value.clone());
+        } else {
+          return Err(runtime_err(
+            format!("module '{}' has no export '{}'", module_name, item_name),
+            span,
+          ));
+        }
       } else {
-        return Err(runtime_err(format!("module '{}' has no export '{}'", module_name, item_name), span));
+        return Err(runtime_err(
+          format!(
+            "nested from-imports longer than 2 segments are not supported: {:?}",
+            import.path
+          ),
+          span,
+        ));
       }
-    } else {
-      return Err(runtime_err(format!("nested imports longer than 2 segments are not supported: {:?}", import.path), span));
+      return Ok(());
     }
+
+    // import a.b.c; → resolve dotted module path, bind last segment
+    let full_name = import.path.join(".");
+    let module = self.load_module(&full_name, span)?;
+    let bind = import
+      .alias
+      .as_ref()
+      .unwrap_or_else(|| import.path.last().unwrap());
+    self.env.define(bind, Value::Module(module));
     Ok(())
   }
 
@@ -440,9 +497,60 @@ impl EvalContext {
     module_ctx.loaded_modules = self.loaded_modules.clone();
 
     for item in &program {
-      if let Item::FnDecl(f) = item {
-        module.functions.insert(f.name.clone(), f.clone());
-        module_ctx.functions.insert(f.name.clone(), f.clone());
+      match item {
+        Item::FnDecl(f) => {
+          module.functions.insert(f.name.clone(), f.clone());
+          module_ctx.functions.insert(f.name.clone(), f.clone());
+        }
+        Item::StructDecl(s) => {
+          let fields = s.fields.iter().map(|(n, _)| n.clone()).collect();
+          let def = Rc::new(StructDef {
+            name: s.name.clone(),
+            fields,
+          });
+          module_ctx.structs.insert(s.name.clone(), def.clone());
+          module
+            .values
+            .insert(s.name.clone(), Value::StructType(def));
+        }
+        Item::EnumDecl(e) => {
+          let mut variants = HashMap::new();
+          for v in &e.variants {
+            variants.insert(
+              v.name.clone(),
+              EnumVariantDef {
+                arity: v.value_types.len(),
+              },
+            );
+          }
+          let def = Rc::new(EnumDef {
+            name: e.name.clone(),
+            variants,
+          });
+          module_ctx.enums.insert(e.name.clone(), def.clone());
+          // Also register on the caller so match arms in imported fns resolve
+          self.enums.insert(e.name.clone(), def.clone());
+          module
+            .values
+            .insert(e.name.clone(), Value::EnumType(def));
+        }
+        Item::ImplDecl { type_name, methods } => {
+          let entry = module_ctx
+            .methods
+            .entry(type_name.clone())
+            .or_insert_with(HashMap::new);
+          for m in methods {
+            entry.insert(m.name.clone(), m.clone());
+          }
+          let parent_entry = self
+            .methods
+            .entry(type_name.clone())
+            .or_insert_with(HashMap::new);
+          for m in methods {
+            parent_entry.insert(m.name.clone(), m.clone());
+          }
+        }
+        _ => {}
       }
     }
 
@@ -509,7 +617,13 @@ impl EvalContext {
   fn exec_stmt(&mut self, stmt: &Stmt) -> Result<ControlFlow, RuntimeError> {
     let span = stmt.span;
     match &stmt.kind {
-      StmtKind::Expr(e) => { self.eval_expr(e)?; Ok(ControlFlow::Normal) }
+      StmtKind::Expr(e) => {
+        let _ = self.eval_expr(e)?;
+        if let Some(v) = self.pending_return.take() {
+          return Ok(ControlFlow::Return(v));
+        }
+        Ok(ControlFlow::Normal)
+      }
       StmtKind::Return(e) => {
         let value = match e {
           Some(expr) => self.eval_expr(expr)?,
@@ -689,9 +803,11 @@ impl EvalContext {
         match &callee.kind {
           ExprKind::Ident(name) => self.call_builtin_or_fn(name, arg_values, span),
           ExprKind::Member { object, name } => {
-            // Qualified stdlib call: Module.name(args)
+            // Qualified stdlib call: Module.name(args) — but prefer a bound Module value
+            // so `import util.math` (bound as `math`) is not shadowed by the math stdlib.
             if let ExprKind::Ident(module) = &object.kind {
-              if self.stdlib.contains_key(module) {
+              let bound_module = matches!(self.env.get(module), Some(Value::Module(_)));
+              if !bound_module && self.stdlib.contains_key(module) {
                 return self.call_qualified(module, name, arg_values, span);
               }
             }
@@ -775,16 +891,50 @@ impl EvalContext {
         for arm in arms {
           let matched = match (&arm.pattern, &value) {
             (Pattern::Wildcard, _) => true,
-            (Pattern::Variant { name, bind: binding }, Value::Enum { module: _, variant, value: inner }) => {
+            (
+              Pattern::Variant {
+                name,
+                binds: binding,
+              },
+              Value::Enum {
+                module: _,
+                variant,
+                value: inner,
+              },
+            ) => {
               if name == variant {
                 self.env.push_scope();
-                if let Some(b) = binding {
-                  if let Some(v) = inner { self.env.define(b, (**v).clone()); }
+                if let Some(v) = inner {
+                  match binding.len() {
+                    0 => {}
+                    1 => {
+                      if binding[0] != "_" {
+                        self.env.define(&binding[0], (**v).clone());
+                      }
+                    }
+                    _ => {
+                      if let Value::Array(a) = &**v {
+                        for (i, b) in binding.iter().enumerate() {
+                          if b == "_" {
+                            continue;
+                          }
+                          if let Some(item) = a.borrow().get(i) {
+                            self.env.define(b, item.clone());
+                          }
+                        }
+                      } else if binding[0] != "_" {
+                        self.env.define(&binding[0], (**v).clone());
+                      }
+                    }
+                  }
                 }
                 let result = self.exec_block(&arm.body)?;
                 self.env.pop_scope();
                 match result {
-                  ControlFlow::Return(v) => return Ok(v),
+                  ControlFlow::Return(v) => {
+                    self.pending_return = Some(v.clone());
+                    return Ok(v);
+                  }
                   ControlFlow::Normal => return Ok(Value::Void),
                   ControlFlow::Break => return Err(runtime_err("break outside loop", span)),
                   ControlFlow::Continue => return Err(runtime_err("continue outside loop", span)),
@@ -800,7 +950,10 @@ impl EvalContext {
           if matched {
             let result = self.exec_block(&arm.body)?;
             match result {
-              ControlFlow::Return(v) => return Ok(v),
+              ControlFlow::Return(v) => {
+                self.pending_return = Some(v.clone());
+                return Ok(v);
+              }
               ControlFlow::Normal => return Ok(Value::Void),
               ControlFlow::Break => return Err(runtime_err("break outside loop", span)),
               ControlFlow::Continue => return Err(runtime_err("continue outside loop", span)),
@@ -1052,12 +1205,15 @@ impl EvalContext {
         Err(runtime_err(format!("enum {} has no variant '{}'", e.name, name), span))
       },
       Value::Module(m) => {
-        let m = m.borrow();
-        if let Some(decl) = m.functions.get(name) {
-          return self.call_fn_decl(decl, _args, span);
+        let decl = {
+          let m = m.borrow();
+          m.functions.get(name).cloned()
+        };
+        if let Some(decl) = decl {
+          return self.call_fn_decl(&decl, _args, span);
         }
         if _args.is_empty() {
-          if let Some(value) = m.values.get(name) {
+          if let Some(value) = m.borrow().values.get(name) {
             return Ok(value.clone());
           }
         }
@@ -1151,6 +1307,16 @@ impl EvalContext {
             value: Some(Box::new(Value::String(e.to_string()))),
           }),
         }
+      }
+      ("io", "exists") => {
+        if args.len() != 1 {
+          return Err(runtime_err("io.exists takes 1 argument".to_string(), span));
+        }
+        let path = match &args[0] {
+          Value::String(s) => s.clone(),
+          _ => return Err(runtime_err("io.exists expects String path".to_string(), span)),
+        };
+        Ok(Value::Bool(std::path::Path::new(&path).exists()))
       }
       ("Array", "first") => {
         if args.len() != 1 { return Err(runtime_err("Array.first takes 1 argument".to_string(), span)); }

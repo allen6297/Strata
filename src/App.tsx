@@ -115,6 +115,7 @@ export default function App() {
     beginTransient,
     applyTransient,
     endTransient,
+    discardTransient,
     undo,
     redo,
     canUndo,
@@ -581,9 +582,11 @@ export default function App() {
   const togglePlay = useCallback(async () => {
     if (playing) {
       setPlaying(false)
+      discardTransient()
       flashStatus('Stopped')
       return
     }
+    beginTransient()
     setPlaying(true)
     flashStatus('Playing…')
 
@@ -643,6 +646,8 @@ export default function App() {
     else flashStatus('on_ready ok')
   }, [
     applyTransient,
+    beginTransient,
+    discardTransient,
     entities,
     flashStatus,
     playing,

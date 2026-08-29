@@ -1,6 +1,6 @@
 # Strata Project Status & Next Steps
 
-Snapshot: **Friday, Aug 28, 2026**
+Snapshot: **Saturday, Aug 29, 2026**
 
 ## 1. What is Strata?
 
@@ -73,14 +73,16 @@ The interpreter is getting close to feature parity with the original Python vers
 1. **Real module import resolution** — done.
 2. **Structs / enums / `impl` methods** — done (declarations, literals, field access, match, `impl Type { fn ... }`).
 3. **Type checker** — done (lenient static pass before eval; catches unknown functions and wrong arity).
-4. **More stdlib parity** — done for `io` (`read_text` / `write_text`), Array `first`/`last`/`contains`, and `str.upper`/`lower`/`trim`. Further parity can follow examples.
-5. **Full example compatibility** — ongoing; prefer porting upstream examples into `cargo test -p rosegold`.
+4. **More stdlib parity** — done for `io` (`read_text` / `write_text` / `exists`), Array `first`/`last`/`contains`, and `str.upper`/`lower`/`trim`.
+5. **Full example compatibility** — ported RoseGold-PY `hello`, `map_result`, `tests`, `tour` (core), and `multi` into `cargo test -p rosegold`. Gaps filled: `pub`, `@test` attributes, dotted module paths (`util.math` → `util/math/lib.rg`), named enum fields, multi-bind match patterns, `return` inside `match`, and `from result/option import`.
 
 ### 4.2 Engine / editor next steps
 
 1. **Script host bridge** — done. `RoseGoldScriptHost` in `strata-engine` runs `on_ready` / `on_update` and applies `strata:` directives to the world. Tauri exposes `engine_set_scripts` / `engine_set_keys`.
 2. **Remove Python fallback** — done.
-3. **Browser preview parity** — the browser preview still applies directives without the real interpreter. Decide whether to keep it as a preview-only stub or compile the Rust interpreter to WASM.
+3. **spawn / destroy directives** — done in the Rust host; `mergeEngineEntities` adds/removes entities in the editor.
+4. **Restore edit state on Stop** — done via `beginTransient` / `discardTransient` around Play.
+5. **Browser preview parity** — the browser preview still applies directives without the real interpreter. Decide whether to keep it as a preview-only stub or compile the Rust interpreter to WASM.
 
 ## 5. Running tests
 
@@ -104,8 +106,7 @@ The fastest way to extend the interpreter is to pick an upstream RoseGold-PY exa
 
 Alternatively, the next highest-impact items are:
 
-- **Wire the editor Play loop to `engine_set_scripts` + `engine_tick`** — done for desktop Tauri; browser still uses preview/hooks.
 - **Browser preview / WASM** (optional).
-- **Upstream example chase** — keep porting RoseGold-PY examples into unit tests.
+- More upstream example chase as needed.
 
-All recent changes are committed and pushed.
+Working tree changes for examples + spawn/destroy/Play restore are ready to commit when you ask.

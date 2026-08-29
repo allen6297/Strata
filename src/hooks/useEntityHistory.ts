@@ -77,6 +77,15 @@ export function useEntityHistory(initial: Entity[]) {
     }
   }, [])
 
+  /** Restore the baseline snapshot and drop it (no undo entry). Used when stopping Play. */
+  const discardTransient = useCallback(() => {
+    const baseline = transientBaseline.current
+    transientBaseline.current = null
+    if (!baseline) return
+    setEntities(cloneEntities(baseline))
+    bump((n) => n + 1)
+  }, [setEntities])
+
   const undo = useCallback(() => {
     const prev = undoStack.current.pop()
     if (!prev) return
@@ -101,6 +110,7 @@ export function useEntityHistory(initial: Entity[]) {
     beginTransient,
     applyTransient,
     endTransient,
+    discardTransient,
     undo,
     redo,
     canUndo,

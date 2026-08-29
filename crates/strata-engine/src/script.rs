@@ -32,6 +32,21 @@ pub enum StrataDirective {
     y: Option<f32>,
     rot: Option<f32>,
   },
+  Spawn {
+    /// Script entity that emitted the directive (unused for placement; for tracing)
+    entity_id: String,
+    name: String,
+    kind: String,
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+    color: String,
+  },
+  Destroy {
+    entity_id: String,
+    target_name: Option<String>,
+  },
   PlaySound { name: Option<String> },
 }
 
@@ -155,6 +170,73 @@ impl RoseGoldScriptHost {
               e.rotation_z = *rot;
               e.sync_rotation_alias();
             }
+          }
+        }
+        StrataDirective::Spawn {
+          name,
+          kind,
+          x,
+          y,
+          width,
+          height,
+          color,
+          ..
+        } => {
+          let id = format!(
+            "spawn_{}",
+            world.entities().len() + 1 + (x * 1000.0) as i32 as usize
+          );
+          let kind = match kind.to_lowercase().as_str() {
+            "mesh" => crate::scene::EntityKind::Mesh,
+            "empty" => crate::scene::EntityKind::Empty,
+            "camera" => crate::scene::EntityKind::Camera,
+            "light" => crate::scene::EntityKind::Light,
+            "script" => crate::scene::EntityKind::Script,
+            _ => crate::scene::EntityKind::Sprite,
+          };
+          let mut e = Entity {
+            id,
+            name: name.clone(),
+            kind,
+            parent_id: None,
+            x: *x,
+            y: *y,
+            z: 0.0,
+            width: *width,
+            height: *height,
+            depth: 8.0,
+            rotation: 0.0,
+            rotation_x: 0.0,
+            rotation_y: 0.0,
+            rotation_z: 0.0,
+            scale_x: 1.0,
+            scale_y: 1.0,
+            scale_z: 1.0,
+            color: color.clone(),
+            visible: true,
+            locked: false,
+            script_path: String::new(),
+            mesh_primitive: Default::default(),
+            light_kind: Default::default(),
+          };
+          e.sync_rotation_alias();
+          world.entities_mut().push(e);
+        }
+        StrataDirective::Destroy {
+          entity_id,
+          target_name,
+        } => {
+          let target_id = if let Some(name) = target_name {
+            world
+              .entities()
+              .iter()
+              .find(|e| e.name.eq_ignore_ascii_case(name))
+              .map(|e| e.id.clone())
+          } else {
+            Some(entity_id.clone())
+          };
+          if let Some(id) = target_id {
+            world.entities_mut().retain(|e| e.id != id);
           }
         }
         StrataDirective::PlaySound { .. } => side_effects.push(d.clone()),
@@ -347,6 +429,35 @@ pub fn parse_strata_directives(stdout: &str, entity_id: &str) -> Vec<StrataDirec
           name: kv.get("name").cloned(),
         });
       }
+      "spawn" => {
+        out.push(StrataDirective::Spawn {
+          entity_id: entity_id.to_string(),
+          name: kv.get("name").cloned().unwrap_or_else(|| "Entity".into()),
+          kind: kv.get("kind").cloned().unwrap_or_else(|| "sprite".into()),
+          x: kv.get("x").and_then(|s| s.parse().ok()).unwrap_or(0.0),
+          y: kv.get("y").and_then(|s| s.parse().ok()).unwrap_or(0.0),
+          width: kv
+            .get("w")
+            .or_else(|| kv.get("width"))
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(32.0),
+          height: kv
+            .get("h")
+            .or_else(|| kv.get("height"))
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(32.0),
+          color: kv
+            .get("color")
+            .cloned()
+            .unwrap_or_else(|| "#61afef".into()),
+        });
+      }
+      "destroy" => {
+        out.push(StrataDirective::Destroy {
+          entity_id: entity_id.to_string(),
+          target_name: kv.get("name").cloned(),
+        });
+      }
       _ => {}
     }
   }
@@ -427,6 +538,54 @@ fn on_update(name: String, x: Float, y: Float, dt: Float): Int {
       StrataDirective::Rot {
         entity_id: "e1".into(),
         degrees: 8.0
+      }
+    );
+  }
+
+  #[test]
+  fn host_spawn_and_destroy() {
+    let scene = SceneFile {
+      version: 2,
+      name: "test".into(),
+      mode: Mode::D2,
+      entities: vec![entity("e1", "Hero", 0.0, 0.0), entity("e2", "Foe", 10.0, 0.0)],
+    };
+    let mut world = World::from_scene(scene);
+    let mut host = RoseGoldScriptHost::new();
+    host.set_script(
+      "e1",
+      r#"
+fn on_ready(name: String, x: Float, y: Float): Int {
+    print("strata:spawn name=Orb kind=sprite x=5 y=6 w=16 h=16 color=#ff0000");
+    print("strata:destroy name=Foe");
+    return 0;
+}
+"#,
+    );
+    world.load(&mut host);
+    assert_eq!(world.entities().len(), 2); // Hero + Orb (Foe destroyed)
+    assert!(world.entities().iter().any(|e| e.name == "Orb"));
+    assert!(!world.entities().iter().any(|e| e.name == "Foe"));
+    let orb = world.entities().iter().find(|e| e.name == "Orb").unwrap();
+    assert!((orb.x - 5.0).abs() < 0.001);
+    assert!((orb.y - 6.0).abs() < 0.001);
+  }
+
+  #[test]
+  fn parse_spawn_and_destroy() {
+    let d = parse_strata_directives(
+      "strata:spawn name=Orb x=1 y=2 w=8 h=8\nstrata:destroy name=Foe\n",
+      "e1",
+    );
+    assert!(matches!(
+      &d[0],
+      StrataDirective::Spawn { name, x, y, .. } if name == "Orb" && (*x - 1.0).abs() < 0.001 && (*y - 2.0).abs() < 0.001
+    ));
+    assert_eq!(
+      d[1],
+      StrataDirective::Destroy {
+        entity_id: "e1".into(),
+        target_name: Some("Foe".into()),
       }
     );
   }

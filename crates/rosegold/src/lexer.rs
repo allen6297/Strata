@@ -21,6 +21,7 @@ pub enum TokenKind {
   Struct,
   Enum,
   Impl,
+  Pub,
   True,
   False,
   None,
@@ -78,6 +79,7 @@ pub enum TokenKind {
   Comma,
   Question,
   Arrow, // -> not used yet but tokenized
+  At,
   // Special
   Eof,
 }
@@ -128,6 +130,7 @@ impl<'a> Lexer<'a> {
       "struct" => TokenKind::Struct,
       "enum" => TokenKind::Enum,
       "impl" => TokenKind::Impl,
+      "pub" => TokenKind::Pub,
       "true" => TokenKind::True,
       "false" => TokenKind::False,
       "none" => TokenKind::None,
@@ -468,6 +471,10 @@ impl<'a> Lexer<'a> {
         '?' => {
           self.advance();
           TokenKind::Question
+        }
+        '@' => {
+          self.advance();
+          TokenKind::At
         }
         _ => return Err(format!("unexpected character {:?} at {}:{}", c, self.line, self.col)),
       };

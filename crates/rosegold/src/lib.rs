@@ -759,4 +759,262 @@ fn main(): Int {
     assert!(out.contains("hi"));
     assert!(out.contains("yo"));
   }
+
+  /// Port of RoseGold-PY `examples/hello.rg`
+  #[test]
+  fn example_hello() {
+    let out = assert_ok(
+      r#"
+fn main(): Int {
+    print("hello from RoseGold");
+    return 0;
+}
+"#,
+    );
+    assert_eq!(out, "hello from RoseGold\n");
+  }
+
+  /// Port of RoseGold-PY `examples/map_result/main.rg`
+  #[test]
+  fn example_map_result() {
+    let out = assert_ok(
+      r#"
+from result import Result;
+from option import Option;
+
+fn lookup(m: Map<String, Int>, key: String): Result<Int, String> {
+    if m.has(key) {
+        return Result.Ok(m[key]);
+    }
+    return Result.Err("missing key");
+}
+
+fn main(): Int {
+    var scores: Map<String, Int> = {"alice": 10, "bob": 7};
+    scores["cara"] = 12;
+
+    var total: Int = 0;
+    for name in scores {
+        total += scores[name];
+    }
+    assert(total == 29);
+    assert(scores.len() == 3);
+
+    match lookup(scores, "bob") {
+        Ok(v) { assert(v == 7); }
+        Err(_) { assert(false); }
+    }
+
+    const missing = lookup(scores, "zed");
+    assert(missing.is_err());
+
+    const maybe: Option<Int> = Option.Some(3);
+    assert(maybe.unwrap_or(0) == 3);
+    assert(Option.None.unwrap_or(9) == 9);
+
+    print(scores);
+    return scores.remove("alice");
+}
+"#,
+    );
+    assert!(out.contains("alice") || out.contains("10"));
+  }
+
+  /// Port of RoseGold-PY `examples/tests/main.rg` (stdlib checks without @test runner)
+  #[test]
+  fn example_stdlib_tests() {
+    let out = assert_ok(
+      r#"
+import math;
+import str;
+import checks;
+
+fn main(): Int {
+    checks.eq(math.pow(2, 10), 1024);
+    checks.eq(math.gcd(12, 18), 6);
+    checks.eq(math.sign(-3), -1);
+    checks.eq_bool(str.starts_with("rosegold", "rose"), true);
+    checks.eq_bool(str.ends_with("rosegold", "gold"), true);
+    checks.eq_bool(str.contains("hello", "ell"), true);
+    checks.eq_string(str.repeat("ab", 3), "ababab");
+    const n = 7;
+    checks.eq_string(f"n={n}", "n=7");
+    print("ok");
+    return 0;
+}
+"#,
+    );
+    assert_eq!(out, "ok\n");
+  }
+
+  /// Port of RoseGold-PY `examples/tour/main.rg` core (maps, Result, f-string, io.exists)
+  #[test]
+  fn example_tour_core() {
+    use std::fs;
+    let dir = std::env::temp_dir().join("rosegold_tour_test");
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).unwrap();
+    let marker = dir.join("present.txt");
+    fs::write(&marker, "x").unwrap();
+    let present = marker.to_string_lossy().replace('\\', "\\\\");
+    let missing = dir.join("nope_missing.rg").to_string_lossy().replace('\\', "\\\\");
+    let source = format!(
+      r#"
+from result import Result;
+from option import Option;
+import io;
+import checks;
+
+fn score_of(scores: Map<String, Int>, name: String): Result<Int, String> {{
+    if scores.has(name) {{
+        return Result.Ok(scores[name]);
+    }}
+    return Result.Err(f"unknown player: {{name}}");
+}}
+
+fn main(): Int {{
+    var scores: Map<String, Int> = {{"ada": 10, "grace": 12}};
+    scores["linus"] = 9;
+    checks.eq(scores.len(), 3);
+    match score_of(scores, "grace") {{
+        Ok(v) {{ checks.eq(v, 12); }}
+        Err(_) {{ checks.eq_bool(false, true); }}
+    }}
+    checks.eq_bool(score_of(scores, "zed").is_err(), true);
+
+    const maybe: Option<Int> = Option.Some(42);
+    checks.eq(maybe.unwrap_or(0), 42);
+    checks.eq(Option.None.unwrap_or(7), 7);
+
+    const pi: Float = 3.14159;
+    checks.eq_string(f"pi≈{{pi:.2f}}", "pi≈3.14");
+
+    checks.eq_bool(io.exists("{present}"), true);
+    checks.eq_bool(io.exists("{missing}"), false);
+
+    const grace = scores["grace"];
+    print(f"players={{scores.len()}} grace={{grace}}");
+    return 0;
+}}
+"#,
+      present = present,
+      missing = missing
+    );
+    let out = assert_ok(&source);
+    assert!(out.contains("players=3 grace=12"));
+  }
+
+  /// Port of RoseGold-PY `examples/multi` (dotted import + named enum fields)
+  #[test]
+  fn example_multi_module() {
+    let mut modules = HashMap::new();
+    modules.insert(
+      "util.math".to_string(),
+      r#"
+pub fn add(a: Int, b: Int): Int {
+    return a + b;
+}
+
+pub enum Shape {
+    Circle(radius: Float),
+    Rectangle(width: Float, height: Float),
+}
+
+pub fn area(shape: Shape): Float {
+    match shape {
+        Shape.Circle(radius) {
+            return 3.14 * radius * radius;
+        }
+        Shape.Rectangle(width, height) {
+            return width * height;
+        }
+        _ {
+            print("Unknown shape");
+        }
+    }
+}
+"#
+      .to_string(),
+    );
+    let result = run_source_with_modules(
+      r#"
+import util.math;
+
+fn main(): Float {
+    const v = math.area(math.Shape.Circle(10.0));
+    print(v);
+    return v;
+}
+"#,
+      modules,
+    );
+    assert!(result.ok, "{}", result.stderr);
+    assert!(result.stdout.contains("314"));
+  }
+
+  #[test]
+  fn example_multi_from_files() {
+    use std::fs;
+    let dir = std::env::temp_dir().join("rosegold_multi_file_test");
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(dir.join("util").join("math")).unwrap();
+    fs::write(
+      dir.join("util").join("math").join("lib.rg"),
+      r#"
+pub enum Shape {
+    Circle(radius: Float),
+    Rectangle(width: Float, height: Float),
+}
+
+pub fn area(shape: Shape): Float {
+    match shape {
+        Shape.Circle(radius) {
+            return 3.14 * radius * radius;
+        }
+        Shape.Rectangle(width, height) {
+            return width * height;
+        }
+        _ {
+            print("Unknown shape");
+        }
+    }
+}
+"#,
+    )
+    .unwrap();
+    fs::write(
+      dir.join("main.rg"),
+      r#"
+import util.math;
+
+fn main(): Float {
+    const v = math.area(math.Shape.Circle(10.0));
+    print(v);
+    return v;
+}
+"#,
+    )
+    .unwrap();
+    let result = run_file(&dir.join("main.rg"));
+    assert!(result.ok, "{}", result.stderr);
+    assert!(result.stdout.contains("314"));
+  }
+
+  #[test]
+  fn attribute_test_is_skipped() {
+    let out = assert_ok(
+      r#"
+@test
+fn helper(): Int {
+    return 1;
+}
+
+fn main(): Int {
+    print(helper());
+    return 0;
+}
+"#,
+    );
+    assert_eq!(out, "1\n");
+  }
 }
