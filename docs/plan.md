@@ -1,6 +1,6 @@
 # Strata Roadmap
 
-Snapshot: **Friday, Aug 28, 2026**
+Snapshot: **Friday, Aug 28, 2026** (render pipelines added **Saturday, Aug 29, 2026**)
 
 Related: [project-status.md](./project-status.md)
 
