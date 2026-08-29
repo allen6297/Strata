@@ -35,7 +35,15 @@ import {
   writeProjectFile,
 } from '@/lib/project'
 import { isTauri, openSceneFile, saveSceneFile } from '@/lib/desktop'
-import { engineLoadScene, engineTick } from '@/lib/engine'
+import {
+  collectEntityScripts,
+  engineLoadScene,
+  engineSetKeys,
+  engineSetScripts,
+  engineSideEffectsToRuntime,
+  engineTick,
+  mergeEngineEntities,
+} from '@/lib/engine'
 import { loadDockLayout, type DockZoneId, type PanelId } from '@/lib/dock-layout'
 import {
   createDefaultEntities,
@@ -176,10 +184,8 @@ export default function App() {
   const statusTimer = useRef<number | null>(null)
   const entitiesRefForPlay = useRef(entities)
   const scriptsRefForPlay = useRef(scripts)
-  const playSceneRef = useRef({ sceneName, entities, sceneMode, scripts })
   entitiesRefForPlay.current = entities
   scriptsRefForPlay.current = scripts
-  playSceneRef.current = { sceneName, entities, sceneMode, scripts }
 
   const runtimeInput = useRuntimeInput(playing)
 
@@ -580,6 +586,37 @@ export default function App() {
     }
     setPlaying(true)
     flashStatus('Playing…')
+
+    // Desktop: RoseGoldScriptHost runs on_ready via engine_load_scene.
+    if (isTauri()) {
+      const bindings = collectEntityScripts(entities, scripts)
+      await engineSetScripts(bindings)
+      const engineMode = sceneMode === 'script' ? '2d' : sceneMode
+      const frame = await engineLoadScene(
+        toSceneDocument(sceneName, entities, scripts, engineMode),
+      )
+      if (frame) {
+        applyTransient(() =>
+          mergeEngineEntities(entities, frame.scene.entities),
+        )
+        runSideEffects(engineSideEffectsToRuntime(frame.sideEffects))
+        const chunks = [
+          bindings.length
+            ? `Engine host: ${bindings.length} script(s)`
+            : 'Engine host: no entity scripts',
+          frame.stdout && `stdout:\n${frame.stdout}`,
+          'Live on_update running…',
+        ].filter(Boolean)
+        setPlayLog(chunks.join('\n\n'))
+      } else {
+        setPlayLog('Engine load failed')
+        flashStatus('Engine load failed')
+      }
+      flashStatus('on_ready ok')
+      return
+    }
+
+    // Browser: preview / hook path (no native interpreter).
     const jobs = collectReadyJobs(entities, scripts)
     const result = await runRoseGoldHooks(jobs)
     let readyDirectives = parseStrataDirectives(result.stdout, jobs)
@@ -604,12 +641,64 @@ export default function App() {
     setPlayLog(chunks.join('\n\n'))
     if (!result.ok) flashStatus(result.message.slice(0, 80))
     else flashStatus('on_ready ok')
-  }, [applyTransient, entities, flashStatus, playing, runSideEffects, scripts])
+  }, [
+    applyTransient,
+    entities,
+    flashStatus,
+    playing,
+    runSideEffects,
+    sceneMode,
+    sceneName,
+    scripts,
+  ])
 
   // Live on_update loop while Playing
   useEffect(() => {
     if (!playing) return
     let cancelled = false
+
+    // Desktop: native RoseGoldScriptHost via engine_tick
+    if (isTauri()) {
+      let raf = 0
+      let last = performance.now()
+      let busy = false
+      const loop = (now: number) => {
+        if (cancelled) return
+        const dt = Math.min(0.05, (now - last) / 1000)
+        last = now
+        if (!busy) {
+          busy = true
+          void (async () => {
+            try {
+              await engineSetKeys(runtimeInput.keysCsv())
+              const frame = await engineTick(dt)
+              if (cancelled || !frame) return
+              applyTransient((prev) =>
+                mergeEngineEntities(prev, frame.scene.entities),
+              )
+              runSideEffects(engineSideEffectsToRuntime(frame.sideEffects))
+              const line = frame.stdout.trim()
+              if (line) {
+                setPlayLog((prev) => {
+                  const next = `${prev}\n\n--- engine ---\n${line}`
+                  return next.length > 8000 ? next.slice(-8000) : next
+                })
+              }
+            } finally {
+              busy = false
+            }
+          })()
+        }
+        raf = requestAnimationFrame(loop)
+      }
+      raf = requestAnimationFrame(loop)
+      return () => {
+        cancelled = true
+        cancelAnimationFrame(raf)
+      }
+    }
+
+    // Browser: hooks / directive preview
     let tick = 0
     const DT = 0.25
 
@@ -822,31 +911,6 @@ export default function App() {
   useEffect(() => {
     applyTheme(theme)
   }, [theme])
-
-  useEffect(() => {
-    if (!playing || !isTauri()) return
-    let cancelled = false
-    let raf = 0
-    let last = performance.now()
-    const snap = playSceneRef.current
-    // Script mode is an editing state; the runtime engine only understands 2d/3d.
-    const engineMode = snap.sceneMode === 'script' ? '2d' : snap.sceneMode
-    void engineLoadScene(
-      toSceneDocument(snap.sceneName, snap.entities, snap.scripts, engineMode),
-    )
-    const loop = (now: number) => {
-      if (cancelled) return
-      const dt = (now - last) / 1000
-      last = now
-      void engineTick(dt)
-      raf = requestAnimationFrame(loop)
-    }
-    raf = requestAnimationFrame(loop)
-    return () => {
-      cancelled = true
-      cancelAnimationFrame(raf)
-    }
-  }, [playing])
 
   // MARK: - Keyboard shortcuts
 

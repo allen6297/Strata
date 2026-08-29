@@ -50,6 +50,33 @@ pub struct EngineInfo {
   pub script_host: String,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct EngineFrame {
+  scene: SceneFile,
+  stdout: String,
+  side_effects: Vec<EngineSideEffect>,
+}
+
+#[derive(Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum EngineSideEffect {
+  PlaySound { name: Option<String> },
+}
+
+fn side_effects_from_host(host: &RoseGoldScriptHost) -> Vec<EngineSideEffect> {
+  host
+    .last_side_effects
+    .iter()
+    .filter_map(|d| match d {
+      strata_engine::StrataDirective::PlaySound { name } => {
+        Some(EngineSideEffect::PlaySound { name: name.clone() })
+      }
+      _ => None,
+    })
+    .collect()
+}
+
 static ROSEGOLD_RUN_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 fn unique_rosegold_dir(base: &str) -> Result<PathBuf, String> {
@@ -319,12 +346,16 @@ fn engine_set_keys(keys: String, state: State<EngineState>) -> Result<(), String
 }
 
 #[tauri::command]
-fn engine_load_scene(scene: SceneFile, state: State<EngineState>) -> Result<SceneFile, String> {
+fn engine_load_scene(scene: SceneFile, state: State<EngineState>) -> Result<EngineFrame, String> {
   let mut world = state.world.lock().map_err(|e| e.to_string())?;
   let mut host = state.host.lock().map_err(|e| e.to_string())?;
   *world = World::from_scene(scene);
   world.load(&mut *host);
-  Ok(world.to_scene())
+  Ok(EngineFrame {
+    scene: world.to_scene(),
+    stdout: host.last_stdout.clone(),
+    side_effects: side_effects_from_host(&host),
+  })
 }
 
 #[tauri::command]
@@ -334,11 +365,15 @@ fn engine_snapshot(state: State<EngineState>) -> Result<SceneFile, String> {
 }
 
 #[tauri::command]
-fn engine_tick(dt: f32, state: State<EngineState>) -> Result<SceneFile, String> {
+fn engine_tick(dt: f32, state: State<EngineState>) -> Result<EngineFrame, String> {
   let mut world = state.world.lock().map_err(|e| e.to_string())?;
   let mut host = state.host.lock().map_err(|e| e.to_string())?;
   world.tick(dt, &mut *host);
-  Ok(world.to_scene())
+  Ok(EngineFrame {
+    scene: world.to_scene(),
+    stdout: host.last_stdout.clone(),
+    side_effects: side_effects_from_host(&host),
+  })
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]

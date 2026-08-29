@@ -104,7 +104,7 @@ The fastest way to extend the interpreter is to pick an upstream RoseGold-PY exa
 
 Alternatively, the next highest-impact items are:
 
-- **Wire the editor Play loop to `engine_set_scripts` + `engine_tick`** so desktop play uses the Rust host end-to-end.
+- **Wire the editor Play loop to `engine_set_scripts` + `engine_tick`** — done for desktop Tauri; browser still uses preview/hooks.
 - **Browser preview / WASM** (optional).
 - **Upstream example chase** — keep porting RoseGold-PY examples into unit tests.
 
