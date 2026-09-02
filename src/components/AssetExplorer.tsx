@@ -1,4 +1,9 @@
 import { Button } from '@/components/ui/button'
+import {
+  ContextMenu,
+  MenuItem,
+  MenuSep,
+} from '@/components/ui/context-menu'
 import { DockDragHandle } from '@/components/DockDragHandle'
 import { DockPanelClose } from '@/components/DockPanelClose'
 import { Input } from '@/components/ui/input'
@@ -7,9 +12,14 @@ import {
   type AssetFilter,
   listChildFolders,
   parentDir,
+  uniqueFolderName,
 } from '@/lib/project'
 import type { DockZoneId } from '@/lib/dock-layout'
 import { cn } from '@/lib/utils'
+import {
+  beginAssetDrag,
+  endAssetDrag,
+} from '@/lib/asset-drag'
 import type { AssetItem } from '@/types/scene'
 import {
   ChevronRight,
@@ -18,6 +28,7 @@ import {
   FilePlus,
   Folder,
   FolderOpen,
+  FolderPlus,
   Image,
   LayoutGrid,
   LayoutList,
@@ -26,7 +37,7 @@ import {
   Search,
   AlertCircle,
 } from 'lucide-react'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, type MouseEvent, type RefObject } from 'react'
 
 interface AssetExplorerProps {
   assets: AssetItem[]
@@ -36,9 +47,13 @@ interface AssetExplorerProps {
   error?: string | null
   onSelect: (id: string) => void
   onActivate?: (asset: AssetItem) => void
+  onAssign?: (asset: AssetItem) => void
+  canAssign?: boolean
   onRefresh?: () => void
   onOpenProject?: () => void
   onCreateScript?: () => void
+  extraFolders?: string[]
+  onCreateFolder?: (relativeDir: string) => Promise<void> | void
   chromeless?: boolean
   dockZone?: DockZoneId
 }
@@ -70,9 +85,13 @@ export function AssetExplorer({
   error = null,
   onSelect,
   onActivate,
+  onAssign,
+  canAssign = false,
   onRefresh,
   onOpenProject,
   onCreateScript,
+  extraFolders = [],
+  onCreateFolder,
   chromeless = false,
   dockZone,
 }: AssetExplorerProps) {
@@ -81,6 +100,18 @@ export function AssetExplorer({
   const [filter, setFilter] = useState<AssetFilter>('all')
   const [view, setView] = useState<'grid' | 'list'>('grid')
   const [focusIndex, setFocusIndex] = useState(0)
+  const [explorerMenu, setExplorerMenu] = useState<
+    | { kind: 'blank'; x: number; y: number }
+    | { kind: 'file'; x: number; y: number; asset: AssetItem }
+    | { kind: 'folder'; x: number; y: number; name: string }
+    | null
+  >(null)
+  const [creatingFolder, setCreatingFolder] = useState<{
+    parent: string
+    name: string
+  } | null>(null)
+  const newFolderRef = useRef<HTMLInputElement>(null)
+  const creatingLock = useRef(false)
   const searchRef = useRef<HTMLInputElement>(null)
 
   // Reset folder when project changes
@@ -94,8 +125,8 @@ export function AssetExplorer({
   const flatMode = query.trim().length > 0 || filter !== 'all'
 
   const folders = useMemo(
-    () => (flatMode ? [] : listChildFolders(assets, cwd)),
-    [assets, cwd, flatMode],
+    () => (flatMode ? [] : listChildFolders(assets, cwd, extraFolders)),
+    [assets, cwd, extraFolders, flatMode],
   )
 
   const visibleFiles = useMemo(() => {
@@ -154,10 +185,54 @@ export function AssetExplorer({
     if (entry.kind === 'file') onSelect(entry.asset.id)
   }
 
+  const canCreateFolder = Boolean(onCreateFolder) && Boolean(projectLabel)
+
+  const beginCreateFolder = (parent: string) => {
+    if (!canCreateFolder) return
+    setExplorerMenu(null)
+    setQuery('')
+    setFilter('all')
+    if (parent !== cwd) setCwd(parent)
+    const siblings = listChildFolders(assets, parent, extraFolders)
+    setCreatingFolder({ parent, name: uniqueFolderName(siblings) })
+  }
+
+  const commitCreateFolder = async () => {
+    if (creatingLock.current || !creatingFolder || !onCreateFolder) return
+    const name = creatingFolder.name.trim()
+    const parent = creatingFolder.parent
+    if (!name) {
+      setCreatingFolder(null)
+      return
+    }
+    const relative = parent ? `${parent}/${name}` : name
+    creatingLock.current = true
+    setCreatingFolder(null)
+    try {
+      await onCreateFolder(relative)
+    } catch {
+      setCreatingFolder({ parent, name })
+    } finally {
+      creatingLock.current = false
+    }
+  }
+
+  useEffect(() => {
+    if (creatingFolder) newFolderRef.current?.focus()
+  }, [creatingFolder])
+
   return (
     <section
       className="panel-animate flex h-full min-h-0 flex-col bg-[var(--bg-panel)]"
       data-testid="asset-explorer"
+      onContextMenu={(e) => {
+        if (e.target instanceof HTMLInputElement) return
+        e.preventDefault()
+        if ((e.target as HTMLElement).closest('[data-explorer-item]')) return
+        if (!projectLabel) return
+        setCreatingFolder(null)
+        setExplorerMenu({ kind: 'blank', x: e.clientX, y: e.clientY })
+      }}
       onKeyDown={(e) => {
         if (e.target instanceof HTMLInputElement) return
         if (e.key === 'ArrowRight' || e.key === 'ArrowDown') {
@@ -191,8 +266,8 @@ export function AssetExplorer({
         {!chromeless && (
           <>
             <FolderOpen className="h-3.5 w-3.5 shrink-0 text-[var(--accent)]" />
-            <h2 className="shrink-0 text-[11px] font-semibold uppercase tracking-wider text-[var(--text-muted)]">
-              Assets
+            <h2 className="shrink-0 text-[10px] font-semibold uppercase tracking-[0.08em] text-[var(--text-muted)]">
+              Files
             </h2>
           </>
         )}
@@ -240,6 +315,17 @@ export function AssetExplorer({
           onClick={() => setView('list')}
         >
           <LayoutList className="h-3.5 w-3.5" />
+        </Button>
+        <Button
+          variant="toolbar"
+          size="sm"
+          title="New folder"
+          data-testid="asset-new-folder"
+          disabled={!canCreateFolder}
+          onClick={() => beginCreateFolder(cwd)}
+        >
+          <FolderPlus className="h-3.5 w-3.5" />
+          <span className="hidden sm:inline">Folder</span>
         </Button>
         <Button
           variant="toolbar"
@@ -310,13 +396,13 @@ export function AssetExplorer({
           <p className="px-2 py-8 text-center text-xs text-[var(--text-muted)]">
             Scanning project folder…
           </p>
-        ) : entries.length === 0 ? (
+        ) : entries.length === 0 && !creatingFolder ? (
           <div className="flex flex-col items-center justify-center gap-2 px-4 py-8 text-center">
             <p className="text-xs text-[var(--text-muted)]">
               {flatMode
                 ? 'No assets match this search/filter.'
                 : projectLabel
-                  ? 'This folder has no Strata assets yet (.rg, .png, .scene, audio).'
+                  ? 'This folder has no Strata assets yet. Right-click to create a folder.'
                   : 'Built-in assets — open a project folder for a full explorer.'}
             </p>
             {!projectLabel && onOpenProject && (
@@ -327,6 +413,18 @@ export function AssetExplorer({
           </div>
         ) : view === 'grid' ? (
           <div className="grid grid-cols-[repeat(auto-fill,minmax(6.5rem,1fr))] gap-2">
+            {creatingFolder && (
+              <FolderDraft
+                name={creatingFolder.name}
+                view="grid"
+                inputRef={newFolderRef}
+                onChange={(name) =>
+                  setCreatingFolder((cur) => (cur ? { ...cur, name } : cur))
+                }
+                onSubmit={() => void commitCreateFolder()}
+                onCancel={() => setCreatingFolder(null)}
+              />
+            )}
             {entries.map((entry, index) =>
               entry.kind === 'folder' ? (
                 <button
@@ -334,9 +432,21 @@ export function AssetExplorer({
                   type="button"
                   aria-label={`Open folder ${entry.name}`}
                   data-testid={`asset-folder-${entry.name}`}
+                  data-explorer-item="folder"
                   onClick={() => {
                     setFocusIndex(index)
                     setCwd(cwd ? `${cwd}/${entry.name}` : entry.name)
+                  }}
+                  onContextMenu={(e) => {
+                    e.preventDefault()
+                    e.stopPropagation()
+                    setFocusIndex(index)
+                    setExplorerMenu({
+                      kind: 'folder',
+                      x: e.clientX,
+                      y: e.clientY,
+                      name: entry.name,
+                    })
                   }}
                   className={cn(
                     'flex flex-col rounded-md border border-[var(--border)] bg-[var(--bg-panel-raised)] px-2 py-2 text-left transition-colors hover:border-[var(--border-strong)]',
@@ -365,12 +475,36 @@ export function AssetExplorer({
                     onSelect(entry.asset.id)
                   }}
                   onActivate={() => onActivate?.(entry.asset)}
+                  onContextMenu={(e) => {
+                    e.preventDefault()
+                    e.stopPropagation()
+                    setFocusIndex(index)
+                    onSelect(entry.asset.id)
+                    setExplorerMenu({
+                      kind: 'file',
+                      x: e.clientX,
+                      y: e.clientY,
+                      asset: entry.asset,
+                    })
+                  }}
                 />
               ),
             )}
           </div>
         ) : (
           <div className="flex flex-col gap-0.5">
+            {creatingFolder && (
+              <FolderDraft
+                name={creatingFolder.name}
+                view="list"
+                inputRef={newFolderRef}
+                onChange={(name) =>
+                  setCreatingFolder((cur) => (cur ? { ...cur, name } : cur))
+                }
+                onSubmit={() => void commitCreateFolder()}
+                onCancel={() => setCreatingFolder(null)}
+              />
+            )}
             {entries.map((entry, index) =>
               entry.kind === 'folder' ? (
                 <button
@@ -378,9 +512,21 @@ export function AssetExplorer({
                   type="button"
                   aria-label={`Open folder ${entry.name}`}
                   data-testid={`asset-folder-${entry.name}`}
+                  data-explorer-item="folder"
                   onClick={() => {
                     setFocusIndex(index)
                     setCwd(cwd ? `${cwd}/${entry.name}` : entry.name)
+                  }}
+                  onContextMenu={(e) => {
+                    e.preventDefault()
+                    e.stopPropagation()
+                    setFocusIndex(index)
+                    setExplorerMenu({
+                      kind: 'folder',
+                      x: e.clientX,
+                      y: e.clientY,
+                      name: entry.name,
+                    })
                   }}
                   className={cn(
                     'flex items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs hover:bg-[var(--bg-panel-raised)]',
@@ -407,6 +553,18 @@ export function AssetExplorer({
                     onSelect(entry.asset.id)
                   }}
                   onActivate={() => onActivate?.(entry.asset)}
+                  onContextMenu={(e) => {
+                    e.preventDefault()
+                    e.stopPropagation()
+                    setFocusIndex(index)
+                    onSelect(entry.asset.id)
+                    setExplorerMenu({
+                      kind: 'file',
+                      x: e.clientX,
+                      y: e.clientY,
+                      asset: entry.asset,
+                    })
+                  }}
                 />
               ),
             )}
@@ -417,7 +575,178 @@ export function AssetExplorer({
         <AssetDetailPanel asset={selectedAsset} onActivate={onActivate} />
       )}
       </div>
+      {explorerMenu && (
+        <ContextMenu
+          x={explorerMenu.x}
+          y={explorerMenu.y}
+          onClose={() => setExplorerMenu(null)}
+        >
+          {explorerMenu.kind === 'folder' ? (
+            <>
+              <MenuItem
+                label="Open"
+                onSelect={() => {
+                  setCwd(cwd ? `${cwd}/${explorerMenu.name}` : explorerMenu.name)
+                  setExplorerMenu(null)
+                }}
+              />
+              <MenuSep />
+              <MenuItem
+                label="New Folder"
+                icon={<FolderPlus className="h-3.5 w-3.5" />}
+                disabled={!canCreateFolder}
+                onSelect={() =>
+                  beginCreateFolder(
+                    cwd ? `${cwd}/${explorerMenu.name}` : explorerMenu.name,
+                  )
+                }
+              />
+            </>
+          ) : explorerMenu.kind === 'file' ? (
+            <>
+              {explorerMenu.asset.type === 'script' ? (
+                <>
+                  <MenuItem
+                    label="Open"
+                    onSelect={() => {
+                      onActivate?.(explorerMenu.asset)
+                      setExplorerMenu(null)
+                    }}
+                  />
+                  <MenuItem
+                    label="Attach to selected"
+                    disabled={!canAssign}
+                    onSelect={() => {
+                      onAssign?.(explorerMenu.asset)
+                      setExplorerMenu(null)
+                    }}
+                  />
+                </>
+              ) : explorerMenu.asset.type === 'texture' ||
+                explorerMenu.asset.type === 'audio' ? (
+                <MenuItem
+                  label="Assign to selected"
+                  disabled={!canAssign}
+                  onSelect={() => {
+                    onAssign?.(explorerMenu.asset)
+                    setExplorerMenu(null)
+                  }}
+                />
+              ) : (
+                <MenuItem
+                  label="Open"
+                  onSelect={() => {
+                    onActivate?.(explorerMenu.asset)
+                    setExplorerMenu(null)
+                  }}
+                />
+              )}
+              <MenuSep />
+              <MenuItem
+                label="New Folder"
+                icon={<FolderPlus className="h-3.5 w-3.5" />}
+                disabled={!canCreateFolder}
+                onSelect={() => beginCreateFolder(cwd)}
+              />
+              {onCreateScript && explorerMenu.asset.type === 'script' ? (
+                <MenuItem
+                  label="New .rg"
+                  onSelect={() => {
+                    onCreateScript()
+                    setExplorerMenu(null)
+                  }}
+                />
+              ) : null}
+            </>
+          ) : (
+            <>
+              <MenuItem
+                label="New Folder"
+                icon={<FolderPlus className="h-3.5 w-3.5" />}
+                disabled={!canCreateFolder}
+                onSelect={() => beginCreateFolder(cwd)}
+              />
+              {onCreateScript ? (
+                <MenuItem
+                  label="New .rg"
+                  onSelect={() => {
+                    onCreateScript()
+                    setExplorerMenu(null)
+                  }}
+                />
+              ) : null}
+            </>
+          )}
+        </ContextMenu>
+      )}
     </section>
+  )
+}
+
+function FolderDraft({
+  name,
+  view,
+  inputRef,
+  onChange,
+  onSubmit,
+  onCancel,
+}: {
+  name: string
+  view: 'grid' | 'list'
+  inputRef: RefObject<HTMLInputElement | null>
+  onChange: (name: string) => void
+  onSubmit: () => void
+  onCancel: () => void
+}) {
+  const field = (
+    <Input
+      ref={inputRef}
+      value={name}
+      data-testid="new-folder-name"
+      className="h-6 text-[11px]"
+      onChange={(e) => onChange(e.target.value)}
+      onKeyDown={(e) => {
+        e.stopPropagation()
+        if (e.key === 'Enter') {
+          e.preventDefault()
+          onSubmit()
+        } else if (e.key === 'Escape') {
+          e.preventDefault()
+          onCancel()
+        }
+      }}
+      onBlur={() => onSubmit()}
+    />
+  )
+  if (view === 'list') {
+    return (
+      <form
+        className="flex items-center gap-2 rounded-md px-2 py-1.5"
+        onSubmit={(e) => {
+          e.preventDefault()
+          onSubmit()
+        }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <FolderPlus className="h-3.5 w-3.5 text-[var(--warn)]" />
+        {field}
+      </form>
+    )
+  }
+  return (
+    <form
+      className="flex flex-col rounded-md border border-[var(--accent-dim)] bg-[var(--bg-panel-raised)] px-2 py-2"
+      onSubmit={(e) => {
+        e.preventDefault()
+        onSubmit()
+      }}
+      onClick={(e) => e.stopPropagation()}
+    >
+      <div className="mb-2 flex h-12 items-center justify-center rounded bg-[var(--bg-input)]">
+        <FolderPlus className="h-5 w-5 text-[var(--warn)]" />
+      </div>
+      {field}
+    </form>
   )
 }
 
@@ -428,6 +757,7 @@ function AssetCard({
   showPath,
   onSelect,
   onActivate,
+  onContextMenu,
 }: {
   asset: AssetItem
   selected: boolean
@@ -435,6 +765,7 @@ function AssetCard({
   showPath: boolean
   onSelect: () => void
   onActivate: () => void
+  onContextMenu?: (e: MouseEvent<HTMLButtonElement>) => void
 }) {
   const Icon = icons[asset.type]
   const [imgError, setImgError] = useState(false)
@@ -442,15 +773,26 @@ function AssetCard({
     <button
       type="button"
       data-testid={`asset-${asset.id}`}
+      data-explorer-item="file"
+      draggable
+      onDragStart={(e) => {
+        e.stopPropagation()
+        beginAssetDrag(asset, e.dataTransfer)
+      }}
+      onDragEnd={endAssetDrag}
       onClick={onSelect}
       onDoubleClick={onActivate}
+      onContextMenu={onContextMenu}
       title={
-        asset.type === 'texture' || asset.type === 'script'
-          ? `Double-click to assign · ${asset.relativePath ?? asset.name}`
-          : (asset.relativePath ?? asset.name)
+        asset.type === 'script'
+          ? `Open in script editor · ${asset.relativePath ?? asset.name}`
+          : asset.type === 'texture'
+            ? `Double-click to assign · ${asset.relativePath ?? asset.name}`
+            : (asset.relativePath ?? asset.name)
       }
       className={cn(
         'flex flex-col rounded-md border px-2 py-2 text-left transition-colors',
+        'cursor-grab active:cursor-grabbing',
         selected
           ? 'border-[var(--accent-dim)] bg-[var(--select)]'
           : 'border-[var(--border)] bg-[var(--bg-panel-raised)] hover:border-[var(--border-strong)]',
@@ -463,6 +805,7 @@ function AssetCard({
             src={asset.url}
             alt=""
             className="max-h-full max-w-full object-contain"
+            draggable={false}
             onError={() => setImgError(true)}
           />
         ) : (
@@ -486,6 +829,7 @@ function AssetRow({
   showPath,
   onSelect,
   onActivate,
+  onContextMenu,
 }: {
   asset: AssetItem
   selected: boolean
@@ -493,16 +837,31 @@ function AssetRow({
   showPath: boolean
   onSelect: () => void
   onActivate: () => void
+  onContextMenu?: (e: MouseEvent<HTMLButtonElement>) => void
 }) {
   const Icon = icons[asset.type]
   return (
     <button
       type="button"
       data-testid={`asset-${asset.id}`}
+      data-explorer-item="file"
+      draggable
+      onDragStart={(e) => {
+        e.stopPropagation()
+        beginAssetDrag(asset, e.dataTransfer)
+      }}
+      onDragEnd={endAssetDrag}
       onClick={onSelect}
       onDoubleClick={onActivate}
+      onContextMenu={onContextMenu}
+      title={
+        asset.type === 'script'
+          ? `Open in script editor · ${asset.relativePath ?? asset.name}`
+          : asset.relativePath ?? asset.name
+      }
       className={cn(
         'flex items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs',
+        'cursor-grab active:cursor-grabbing',
         selected || focused
           ? 'bg-[var(--select)] text-[var(--text)]'
           : 'text-[var(--text-muted)] hover:bg-[var(--bg-panel-raised)] hover:text-[var(--text)]',
@@ -526,7 +885,6 @@ function AssetDetailPanel({
   onActivate?: (asset: AssetItem) => void
 }) {
   const Icon = icons[asset.type]
-  const previewLines = asset.content?.split('\n').slice(0, 8).join('\n') ?? ''
   const [imgError, setImgError] = useState(false)
 
   return (
@@ -566,21 +924,20 @@ function AssetDetailPanel({
             </div>
           </div>
         ) : asset.type === 'script' ? (
-          <div className="flex flex-col gap-1">
-            <pre className="overflow-hidden rounded bg-[var(--bg-input)] p-2 font-mono text-[10px] leading-relaxed text-[var(--text-muted)]">
-              {previewLines || (
-                <span className="italic opacity-60">Empty script</span>
-              )}
-            </pre>
+          <div className="text-[10px] text-[var(--text-muted)]">
+            <span className="font-mono">{asset.relativePath ?? asset.name}</span>
             {onActivate && (
               <button
                 type="button"
                 onClick={() => onActivate(asset)}
-                className="self-start text-[10px] text-[var(--accent)] hover:underline"
+                className="mt-1 block text-left text-[var(--accent)] hover:underline"
               >
                 Open in script editor
               </button>
             )}
+            <p className="mt-1 opacity-60">
+              Click opens the tab. Attach via Inspector, drag, or right-click.
+            </p>
           </div>
         ) : asset.type === 'audio' ? (
           <div className="text-[10px] text-[var(--text-muted)]">

@@ -17,18 +17,8 @@
     "comments": {
       "patterns": [
         {
-          "name": "comment.block.documentation.rosegold",
-          "begin": "/\\*",
-          "end": "\\*/"
-        },
-        {
-          "name": "comment.block.rosegold",
-          "begin": "//\\*",
-          "end": "\\*//"
-        },
-        {
           "name": "comment.line.documentation.rosegold",
-          "match": "///.*$"
+          "match": "##.*$"
         },
         {
           "name": "comment.line.number-sign.rosegold",
@@ -40,40 +30,11 @@
       "patterns": [
         {
           "name": "meta.annotation.rosegold",
-          "match": "(@)(deprecated|test|no_ufcs)\\b",
+          "match": "(@)(test|export|export_group|ufcs|node)\\b",
           "captures": {
             "1": { "name": "punctuation.definition.decorator.rosegold" },
             "2": { "name": "keyword.control.directive.rosegold" }
           }
-        },
-        {
-          "name": "meta.annotation.rosegold",
-          "begin": "(@)(ufcs)\\b",
-          "beginCaptures": {
-            "1": { "name": "punctuation.definition.decorator.rosegold" },
-            "2": { "name": "keyword.control.directive.rosegold" }
-          },
-          "end": "(?=\\s*(?:pub|private|internal|fn|class|struct|enum|trait|mod|var|const|@|#|///)|$)",
-          "patterns": [
-            {
-              "begin": "\\(",
-              "beginCaptures": {
-                "0": { "name": "punctuation.definition.parameters.begin.rosegold" }
-              },
-              "end": "\\)",
-              "endCaptures": {
-                "0": { "name": "punctuation.definition.parameters.end.rosegold" }
-              },
-              "patterns": [
-                {
-                  "match": "\\b(type)\\b",
-                  "name": "variable.parameter.rosegold"
-                },
-                { "include": "#types" },
-                { "include": "#operators" }
-              ]
-            }
-          ]
         },
         {
           "name": "meta.annotation.rosegold",
@@ -82,7 +43,7 @@
             "1": { "name": "punctuation.definition.decorator.rosegold" },
             "2": { "name": "entity.name.function.decorator.rosegold" }
           },
-          "end": "(?=\\s*(?:pub|private|internal|fn|class|struct|enum|trait|mod|var|const|@|#|///)|$)",
+          "end": "(?=\\s*(?:pub|fn|struct|class|trait|enum|mod|impl|var|const|signal|@|#)|$)",
           "patterns": [
             {
               "begin": "\\(",
@@ -96,10 +57,7 @@
               "patterns": [
                 { "include": "#strings" },
                 { "include": "#numbers" },
-                { "include": "#constants" },
-                { "include": "#types" },
-                { "include": "#keywords" },
-                { "include": "#operators" }
+                { "include": "#constants" }
               ]
             }
           ]
@@ -176,15 +134,11 @@
         },
         {
           "name": "storage.type.rosegold",
-          "match": "\\b(class|struct|enum|trait|mod|fn|var|const|init)\\b"
+          "match": "\\b(struct|class|trait|extends|enum|mod|impl|fn|var|const|signal)\\b"
         },
         {
           "name": "storage.modifier.rosegold",
-          "match": "\\b(pub|private|internal|static|final|extends|implements)\\b"
-        },
-        {
-          "name": "keyword.operator.cast.rosegold",
-          "match": "\\b(as|is)\\b"
+          "match": "\\b(pub)\\b"
         },
         {
           "name": "variable.language.rosegold",
@@ -196,7 +150,7 @@
       "patterns": [
         {
           "name": "support.type.builtin.rosegold",
-          "match": "\\b(Void|Bool|Int|Float|String|Array|Map|Fn)\\b"
+          "match": "\\b(Void|Bool|Int|Float|String|Str|Array|Map|Option|Result|Vec2|Node|Empty|Sprite|Tilemap|Camera|Mesh|Light)\\b"
         },
         {
           "name": "entity.name.type.rosegold",
@@ -240,12 +194,20 @@
     "operators": {
       "patterns": [
         {
+          "name": "keyword.operator.arrow.rosegold",
+          "match": "(->)"
+        },
+        {
           "name": "keyword.operator.assignment.compound.rosegold",
-          "match": "(\\+=|-=|\\*=|/=|%=)"
+          "match": "(\\+=|-=|\\*=|/=|%=|&=|\\|=|\\^=)"
+        },
+        {
+          "name": "keyword.operator.bitwise.shift.rosegold",
+          "match": "(<<|>>)"
         },
         {
           "name": "keyword.operator.comparison.rosegold",
-          "match": "(===|!==|==|!=|<=|>=|<|>)"
+          "match": "(==|!=|<=|>=|<|>)"
         },
         {
           "name": "keyword.operator.logical.rosegold",
@@ -253,7 +215,7 @@
         },
         {
           "name": "keyword.operator.bitwise.rosegold",
-          "match": "(\\||\\^|&)"
+          "match": "(&|\\||\\^|~)"
         },
         {
           "name": "keyword.operator.arithmetic.rosegold",

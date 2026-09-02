@@ -17,7 +17,9 @@ export type MenuAction =
   | 'mode_3d'
   | 'mode_script'
   // MARK: - Insert
+  | 'add_node'
   | 'add_sprite'
+  | 'add_tilemap'
   | 'add_empty'
   | 'add_camera'
   | 'add_mesh'
@@ -32,6 +34,7 @@ export type MenuAction =
   | 'toggle_hierarchy'
   | 'toggle_inspector'
   | 'toggle_assets'
+  | 'toggle_log'
   | 'reset_layout'
   // MARK: - Help
   | 'help_docs'
@@ -53,7 +56,9 @@ const MENU_ACTIONS = new Set<string>([
   'mode_3d',
   'mode_script',
   // MARK: - Insert
+  'add_node',
   'add_sprite',
+  'add_tilemap',
   'add_empty',
   'add_camera',
   'add_mesh',
@@ -68,6 +73,7 @@ const MENU_ACTIONS = new Set<string>([
   'toggle_hierarchy',
   'toggle_inspector',
   'toggle_assets',
+  'toggle_log',
   'reset_layout',
   // MARK: - Help
   'help_docs',

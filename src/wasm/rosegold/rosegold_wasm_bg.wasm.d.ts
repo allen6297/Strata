@@ -1,10 +1,32 @@
 /* tslint:disable */
 /* eslint-disable */
 export const memory: WebAssembly.Memory;
+export const check: (a: number, b: number, c: number, d: number) => any;
+export const check_with_modules: (a: number, b: number, c: number, d: number, e: number, f: number) => any;
+export const def_at: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => any;
+export const format_source: (a: number, b: number) => [number, number, number, number];
+export const list_exports: (a: number, b: number) => any;
+export const list_fns: (a: number, b: number) => any;
+export const list_nodes: (a: number, b: number) => any;
+export const list_signals: (a: number, b: number) => any;
+export const list_signals_with_modules: (a: number, b: number, c: number, d: number) => any;
 export const run: (a: number, b: number) => any;
 export const run_hooks: (a: number, b: number) => any;
-export const __wbindgen_free: (a: number, b: number, c: number) => void;
+export const run_preview: (a: number, b: number, c: number, d: number, e: number, f: number) => any;
+export const run_preview_with_modules: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => any;
+export const stdlib_source: (a: number, b: number) => [number, number];
+export const hover_at: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => any;
+export const engine_clear_play: () => void;
+export const engine_info: () => any;
+export const engine_load_scene: (a: number, b: number) => [number, number, number];
+export const engine_set_audio: (a: number, b: number) => [number, number];
+export const engine_set_keys: (a: number, b: number, c: number, d: number) => void;
+export const engine_set_scripts: (a: number, b: number) => [number, number];
+export const engine_snapshot: () => [number, number, number];
+export const engine_tick: (a: number) => [number, number, number];
 export const __wbindgen_malloc: (a: number, b: number) => number;
 export const __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;
+export const __wbindgen_free: (a: number, b: number, c: number) => void;
 export const __wbindgen_externrefs: WebAssembly.Table;
+export const __externref_table_dealloc: (a: number) => void;
 export const __wbindgen_start: () => void;

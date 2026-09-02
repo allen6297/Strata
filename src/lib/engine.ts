@@ -1,8 +1,20 @@
 import { invoke } from '@tauri-apps/api/core'
 import { isTauri } from '@/lib/desktop'
+import { DEFAULT_LAYER_ID } from '@/lib/draw-order'
 import { entityDefaults } from '@/lib/scene'
 import type { AssetItem, Entity, SceneDocument } from '@/types/scene'
 import type { RuntimeSideEffect } from '@/lib/rosegold'
+import {
+  isWasmEngineAvailable,
+  wasmEngineClearPlay,
+  wasmEngineInfo,
+  wasmEngineLoadScene,
+  wasmEngineSetAudio,
+  wasmEngineSetKeys,
+  wasmEngineSetScripts,
+  wasmEngineSnapshot,
+  wasmEngineTick,
+} from '@/lib/rosegold-wasm'
 
 export interface EngineInfo {
   version: string
@@ -12,6 +24,7 @@ export interface EngineInfo {
 export interface EngineSideEffect {
   type: 'play_sound'
   name?: string | null
+  url?: string | null
 }
 
 export interface EngineFrame {
@@ -28,43 +41,81 @@ export interface EntityScriptBinding {
   name?: string
 }
 
+export interface AudioClipBinding {
+  name: string
+  url: string
+}
+
+export async function engineAvailable(): Promise<boolean> {
+  if (isTauri()) return true
+  return isWasmEngineAvailable()
+}
+
 export async function engineInfo(): Promise<EngineInfo | null> {
-  if (!isTauri()) return null
-  return invoke<EngineInfo>('engine_info')
+  if (isTauri()) return invoke<EngineInfo>('engine_info')
+  return wasmEngineInfo()
 }
 
 export async function engineSetScripts(
   scripts: EntityScriptBinding[],
 ): Promise<void> {
-  if (!isTauri()) return
-  await invoke('engine_set_scripts', { scripts })
+  if (isTauri()) {
+    await invoke('engine_set_scripts', { scripts })
+    return
+  }
+  await wasmEngineSetScripts(scripts)
 }
 
-export async function engineSetKeys(keys: string): Promise<void> {
-  if (!isTauri()) return
-  await invoke('engine_set_keys', { keys })
+export async function engineSetAudio(
+  clips: AudioClipBinding[],
+): Promise<void> {
+  if (isTauri()) {
+    await invoke('engine_set_audio', { clips })
+    return
+  }
+  await wasmEngineSetAudio(clips)
+}
+
+export async function engineSetKeys(
+  keys: string,
+  pressed = '',
+): Promise<void> {
+  if (isTauri()) {
+    await invoke('engine_set_keys', { keys, pressed })
+    return
+  }
+  await wasmEngineSetKeys(keys, pressed)
 }
 
 export async function engineClearPlay(): Promise<void> {
-  if (!isTauri()) return
-  await invoke('engine_clear_play')
+  if (isTauri()) {
+    await invoke('engine_clear_play')
+    return
+  }
+  await wasmEngineClearPlay()
 }
 
 export async function engineLoadScene(
   scene: SceneDocument,
 ): Promise<EngineFrame | null> {
-  if (!isTauri()) return null
-  return invoke<EngineFrame>('engine_load_scene', { scene })
+  if (isTauri()) {
+    return invoke<EngineFrame>('engine_load_scene', { scene })
+  }
+  return wasmEngineLoadScene(scene)
 }
 
 export async function engineSnapshot(): Promise<SceneDocument | null> {
-  if (!isTauri()) return null
-  return invoke<SceneDocument>('engine_snapshot')
+  if (isTauri()) {
+    return invoke<SceneDocument>('engine_snapshot')
+  }
+  return wasmEngineSnapshot()
 }
 
 export async function engineTick(dt: number): Promise<EngineFrame | null> {
-  if (!isTauri()) return null
-  return invoke<EngineFrame>('engine_tick', { dt })
+  if (isTauri()) {
+    return invoke<EngineFrame>('engine_tick', { dt })
+  }
+  return wasmEngineTick(dt)
 }
 
 /** Build entityId → RoseGold source for entities that have a script asset. */
@@ -113,6 +164,22 @@ export function collectEntityScripts(
   return out
 }
 
+export function collectAudioClips(assets: AssetItem[]): AudioClipBinding[] {
+  const out: AudioClipBinding[] = []
+  const seen = new Set<string>()
+  for (const a of assets) {
+    if (a.type !== 'audio' || !a.url) continue
+    const names = [a.name, a.relativePath].filter(Boolean) as string[]
+    for (const name of names) {
+      const key = name.toLowerCase()
+      if (seen.has(key)) continue
+      seen.add(key)
+      out.push({ name, url: a.url })
+    }
+  }
+  return out
+}
+
 function resolveScriptId(
   scripts: AssetItem[],
   scriptPath: string | undefined,
@@ -139,15 +206,22 @@ export function mergeEngineEntities(
   return engineEntities.map((n) => {
     const e = prevById.get(n.id)
     if (!e) {
-      const scriptId =
-        resolveScriptId(scripts, n.scriptPath) ??
-        (n.scriptPath ? null : null)
       return entityDefaults({
         id: n.id,
         name: n.name,
         kind: n.kind,
-        scriptId,
+        parentId: n.parentId ?? null,
+        scriptId: n.scriptId ?? resolveScriptId(scripts, n.scriptPath) ?? null,
         scriptPath: n.scriptPath || '',
+        textureId: n.textureId ?? null,
+        audioId: n.audioId ?? null,
+        layerId: n.layerId || DEFAULT_LAYER_ID,
+        sortOrder: n.sortOrder ?? null,
+        solid: Boolean(n.solid),
+        collisionLayer: n.collisionLayer ?? 1,
+        collisionMask: n.collisionMask ?? 0xff,
+        tileSize: n.tileSize ?? 16,
+        tiles: n.tiles ?? [],
         x: n.x,
         y: n.y,
         z: n.z,
@@ -166,6 +240,11 @@ export function mergeEngineEntities(
         color: n.color,
         meshPrimitive: n.meshPrimitive,
         lightKind: n.lightKind,
+        scriptProps: n.scriptProps ?? {},
+        connections: n.connections ?? [],
+        prefabId: n.prefabId ?? null,
+        prefabSourceId: n.prefabSourceId ?? null,
+        prefabOverrides: n.prefabOverrides ?? [],
       })
     }
     return {
@@ -188,11 +267,26 @@ export function mergeEngineEntities(
       color: n.color,
       name: n.name,
       kind: n.kind,
+      parentId: n.parentId ?? e.parentId,
       scriptPath: n.scriptPath || e.scriptPath,
       scriptId:
+        n.scriptId ??
         e.scriptId ??
-        resolveScriptId(scripts, n.scriptPath || e.scriptPath) ??
-        e.scriptId,
+        resolveScriptId(scripts, n.scriptPath || e.scriptPath),
+      textureId: n.textureId ?? e.textureId,
+      audioId: n.audioId ?? e.audioId,
+      layerId: n.layerId || e.layerId || DEFAULT_LAYER_ID,
+      sortOrder: n.sortOrder !== undefined ? n.sortOrder : e.sortOrder,
+      solid: n.solid ?? e.solid,
+      collisionLayer: n.collisionLayer ?? e.collisionLayer,
+      collisionMask: n.collisionMask ?? e.collisionMask,
+      tileSize: n.tileSize ?? e.tileSize,
+      tiles: n.tiles ?? e.tiles,
+      scriptProps: n.scriptProps ?? e.scriptProps,
+      connections: n.connections ?? e.connections,
+      prefabId: n.prefabId ?? e.prefabId,
+      prefabSourceId: n.prefabSourceId ?? e.prefabSourceId,
+      prefabOverrides: n.prefabOverrides ?? e.prefabOverrides,
     }
   })
 }
@@ -205,5 +299,6 @@ export function engineSideEffectsToRuntime(
     .map((e) => ({
       type: 'play_sound' as const,
       assetName: e.name ?? undefined,
+      url: e.url ?? undefined,
     }))
 }

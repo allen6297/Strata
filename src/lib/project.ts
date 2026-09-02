@@ -23,6 +23,9 @@ const SKIP_DIRS = new Set([
   '.strata',
 ])
 
+let browserDirHandle: FileSystemDirectoryHandle | null = null
+const browserHandleCache = new Map<string, FileSystemDirectoryHandle>()
+
 export function formatBytes(n: number): string {
   if (!Number.isFinite(n) || n < 0) return '—'
   if (n < 1024) return `${n} B`
@@ -30,8 +33,29 @@ export function formatBytes(n: number): string {
   return `${(n / (1024 * 1024)).toFixed(1)} MB`
 }
 
+export function shouldSkipDir(name: string): boolean {
+  return SKIP_DIRS.has(name) || name.startsWith('.')
+}
+
+/** True when the host can ask the user to grant a folder (Tauri or Chromium FSA). */
+export function canPickDirectory(): boolean {
+  if (isTauri()) return true
+  return typeof window !== 'undefined' && typeof window.showDirectoryPicker === 'function'
+}
+
+export function setBrowserProjectHandle(handle: FileSystemDirectoryHandle | null) {
+  browserDirHandle = handle
+  browserHandleCache.clear()
+  if (handle) browserHandleCache.set('', handle)
+}
+
+export function getBrowserProjectHandle(): FileSystemDirectoryHandle | null {
+  return browserDirHandle
+}
+
 export function classifyFileName(name: string): AssetItem['type'] | null {
   const lower = name.toLowerCase()
+  if (lower === 'strata.json') return null
   if (lower.endsWith('.rg')) return 'script'
   if (lower.endsWith('.scene')) return 'scene'
   if (lower.endsWith('.json')) return 'scene'
@@ -49,20 +73,35 @@ export function parentDir(relativePath: string): string {
 export function listChildFolders(
   assets: AssetItem[],
   cwd: string,
+  extraFolders: string[] = [],
 ): string[] {
   const prefix = cwd ? `${cwd}/` : ''
   const folders = new Set<string>()
+  const consider = (relRaw: string, requireNestedFile: boolean) => {
+    const rel = relRaw.replace(/\\/g, '/')
+    if (!rel) return
+    if (cwd) {
+      if (rel === cwd) return
+      if (!rel.startsWith(prefix)) return
+      const rest = rel.slice(prefix.length)
+      const slash = rest.indexOf('/')
+      if (slash > 0) folders.add(rest.slice(0, slash))
+      else if (slash < 0 && rest && !requireNestedFile) folders.add(rest)
+    } else {
+      const slash = rel.indexOf('/')
+      if (slash > 0) folders.add(rel.slice(0, slash))
+      else if (slash < 0 && !requireNestedFile) folders.add(rel)
+    }
+  }
   for (const a of assets) {
     const rel = (a.relativePath ?? a.name).replace(/\\/g, '/')
     if (cwd && !rel.startsWith(prefix)) continue
     if (!cwd && rel.includes('/') === false && !a.relativePath) {
-      // bundled root assets without relativePath — no folders
       continue
     }
-    const rest = cwd ? rel.slice(prefix.length) : rel
-    const slash = rest.indexOf('/')
-    if (slash > 0) folders.add(rest.slice(0, slash))
+    consider(rel, true)
   }
+  for (const rel of extraFolders) consider(rel, false)
   return [...folders].sort((a, b) => a.localeCompare(b))
 }
 
@@ -92,30 +131,26 @@ export async function pickProjectDirectory(): Promise<string | null> {
     return typeof selected === 'string' ? selected : null
   }
 
-  const w = window as Window & {
-    showDirectoryPicker?: () => Promise<FileSystemDirectoryHandle>
-  }
-  if (!w.showDirectoryPicker) {
+  if (!window.showDirectoryPicker) {
     throw new Error(
       'Open Project needs the desktop app, or a Chromium browser with folder access.',
     )
   }
-  const handle = await w.showDirectoryPicker()
-  browserDirHandle = handle
-  browserHandleCache.clear()
-  browserHandleCache.set('', handle)
+  const handle = await window.showDirectoryPicker({
+    mode: 'readwrite',
+    id: 'strata-project',
+  })
+  setBrowserProjectHandle(handle)
   return `browser:${handle.name}`
 }
 
-let browserDirHandle: FileSystemDirectoryHandle | null = null
-const browserHandleCache = new Map<string, FileSystemDirectoryHandle>()
-
 async function getBrowserDir(
   relativeDir: string,
+  create = false,
 ): Promise<FileSystemDirectoryHandle | null> {
   if (!browserDirHandle) return null
   if (!relativeDir) return browserDirHandle
-  if (browserHandleCache.has(relativeDir)) {
+  if (!create && browserHandleCache.has(relativeDir)) {
     return browserHandleCache.get(relativeDir)!
   }
   const parts = relativeDir.split('/').filter(Boolean)
@@ -123,12 +158,11 @@ async function getBrowserDir(
   let built = ''
   for (const part of parts) {
     built = built ? `${built}/${part}` : part
-    if (browserHandleCache.has(built)) {
+    if (!create && browserHandleCache.has(built)) {
       cur = browserHandleCache.get(built)!
       continue
     }
-    // File System Access API getDirectoryHandle
-    const next = await cur.getDirectoryHandle(part)
+    const next = await cur.getDirectoryHandle(part, { create })
     browserHandleCache.set(built, next)
     cur = next
   }
@@ -144,9 +178,16 @@ async function walkBrowserDir(
   if (depth > 6) return
   for await (const [name, handle] of dir.entries()) {
     if (handle.kind === 'directory') {
-      if (SKIP_DIRS.has(name) || name.startsWith('.')) continue
+      if (shouldSkipDir(name)) continue
       const nextRel = relativeDir ? `${relativeDir}/${name}` : name
       browserHandleCache.set(nextRel, handle as FileSystemDirectoryHandle)
+      out.push({
+        name,
+        path: `browser:${browserDirHandle!.name}/${nextRel}`,
+        relativePath: nextRel,
+        kind: 'folder',
+        size: 0,
+      })
       await walkBrowserDir(
         handle as FileSystemDirectoryHandle,
         nextRel,
@@ -205,10 +246,10 @@ export async function writeProjectFile(
     const relative = path.replace(/^browser:[^/]+\//, '')
     const dirPath = parentDir(relative)
     const fileName = relative.split('/').pop()!
-    const dir = await getBrowserDir(dirPath)
+    const dir = await getBrowserDir(dirPath, true)
     if (!dir) throw new Error('Folder not found')
     const handle = await dir.getFileHandle(fileName, { create: true })
-    const writable = await handle.createWritable()
+    const writable = await handle.createWritable({ keepExistingData: false })
     await writable.write(contents)
     await writable.close()
     return
@@ -216,6 +257,202 @@ export async function writeProjectFile(
   if (!isTauri()) throw new Error('Saving project files requires desktop app')
   const { invoke } = await import('@tauri-apps/api/core')
   await invoke('write_project_file', { path, contents })
+}
+
+export function sanitizeFolderSegment(name: string): string {
+  const trimmed = name.trim()
+  if (!trimmed) throw new Error('Name is empty')
+  if (
+    trimmed.includes('/') ||
+    trimmed.includes('\\') ||
+    trimmed.includes('..')
+  ) {
+    throw new Error('Name cannot contain path separators')
+  }
+  if (shouldSkipDir(trimmed)) {
+    throw new Error('That folder name is reserved')
+  }
+  return trimmed
+}
+
+export function uniqueFolderName(existing: string[]): string {
+  const taken = new Set(existing.map((n) => n.toLowerCase()))
+  if (!taken.has('new folder')) return 'New Folder'
+  let n = 2
+  while (taken.has(`new folder ${n}`)) n += 1
+  return `New Folder ${n}`
+}
+
+export async function createProjectDirectory(
+  projectPath: string,
+  relativeDir: string,
+): Promise<void> {
+  const parts = relativeDir.replace(/\\/g, '/').split('/').filter(Boolean)
+  if (!parts.length) throw new Error('Name is empty')
+  const safe = parts.map(sanitizeFolderSegment)
+  const relative = safe.join('/')
+  const last = safe[safe.length - 1]!
+  if (projectPath.startsWith('browser:')) {
+    if (!browserDirHandle) throw new Error('No project folder open')
+    const parent = await getBrowserDir(parentDir(relative), true)
+    if (!parent) throw new Error('Folder not found')
+    for await (const [name] of parent.entries()) {
+      if (name === last) throw new Error('A folder with that name already exists')
+    }
+    const created = await parent.getDirectoryHandle(last, { create: true })
+    browserHandleCache.set(relative, created)
+    return
+  }
+  if (!isTauri()) throw new Error('Creating folders requires the desktop app')
+  const { invoke } = await import('@tauri-apps/api/core')
+  await invoke('create_project_dir', {
+    path: joinProjectPath(projectPath, relative),
+  })
+}
+
+function bytesToBase64(bytes: Uint8Array): string {
+  let binary = ''
+  const chunk = 0x8000
+  for (let i = 0; i < bytes.length; i += chunk) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunk))
+  }
+  return btoa(binary)
+}
+
+export async function writeProjectBytes(
+  path: string,
+  bytes: Uint8Array,
+): Promise<void> {
+  if (path.startsWith('browser:')) {
+    if (!browserDirHandle) throw new Error('No project folder open')
+    const relative = path.replace(/^browser:[^/]+\//, '')
+    const dirPath = parentDir(relative)
+    const fileName = relative.split('/').pop()!
+    const dir = await getBrowserDir(dirPath, true)
+    if (!dir) throw new Error('Folder not found')
+    const handle = await dir.getFileHandle(fileName, { create: true })
+    const writable = await handle.createWritable({ keepExistingData: false })
+    const ab = new ArrayBuffer(bytes.byteLength)
+    new Uint8Array(ab).set(bytes)
+    await writable.write(ab)
+    await writable.close()
+    return
+  }
+  if (!isTauri()) throw new Error('Saving project files requires desktop app')
+  const { invoke } = await import('@tauri-apps/api/core')
+  await invoke('write_project_file_base64', {
+    path,
+    contents: bytesToBase64(bytes),
+  })
+}
+
+export function assetFolderForType(
+  type: Exclude<AssetItem['type'], 'scene'>,
+): string {
+  if (type === 'script') return 'scripts'
+  if (type === 'audio') return 'audio'
+  return 'textures'
+}
+
+export function uniqueProjectRel(
+  existing: Iterable<string>,
+  folder: string,
+  name: string,
+): string {
+  const taken = new Set(
+    [...existing].map((p) => p.replace(/\\/g, '/').toLowerCase()),
+  )
+  const dest = `${folder}/${name}`
+  if (!taken.has(dest.toLowerCase())) return dest
+  const dot = name.lastIndexOf('.')
+  const stem = dot >= 0 ? name.slice(0, dot) : name
+  const ext = dot >= 0 ? name.slice(dot) : ''
+  for (let n = 2; n < 1000; n++) {
+    const candidate = `${folder}/${stem}-${n}${ext}`
+    if (!taken.has(candidate.toLowerCase())) return candidate
+  }
+  return `${folder}/${stem}-${Date.now()}${ext}`
+}
+
+function nativeFilePath(file: File): string | undefined {
+  const path = (file as File & { path?: string }).path
+  return path && path.length > 0 ? path : undefined
+}
+
+function relIfUnderProject(absPath: string, projectPath: string): string | null {
+  const file = absPath.replace(/\\/g, '/')
+  const root = projectPath.replace(/\\/g, '/').replace(/\/$/, '')
+  const prefix = `${root}/`
+  if (file === root) return null
+  if (file.startsWith(prefix)) return file.slice(prefix.length)
+  return null
+}
+
+export type ImportedDrop = {
+  type: Exclude<AssetItem['type'], 'scene'>
+  relativePath: string
+}
+
+/** Copy Finder / OS files into the open project. Skips `.scene`. */
+export async function importDroppedFiles(
+  projectPath: string,
+  files: File[],
+  existingRelative: string[],
+  prefer?: AssetItem['type'],
+): Promise<ImportedDrop[]> {
+  const taken = new Set(
+    existingRelative.map((p) => p.replace(/\\/g, '/')),
+  )
+  const out: ImportedDrop[] = []
+  for (const file of files) {
+    const kind = classifyFileName(file.name)
+    if (!kind || kind === 'scene') continue
+    if (prefer && kind !== prefer) continue
+    const disk = nativeFilePath(file)
+    if (disk && !projectPath.startsWith('browser:')) {
+      const rel = relIfUnderProject(disk, projectPath)
+      if (rel) {
+        out.push({ type: kind, relativePath: rel })
+        continue
+      }
+    }
+    const folder = assetFolderForType(kind)
+    const rel = uniqueProjectRel(taken, folder, file.name)
+    taken.add(rel)
+    const dest = joinProjectPath(projectPath, rel)
+    if (kind === 'script') {
+      await writeProjectFile(dest, await file.text())
+    } else {
+      await writeProjectBytes(dest, new Uint8Array(await file.arrayBuffer()))
+    }
+    out.push({ type: kind, relativePath: rel })
+  }
+  return out
+}
+
+export async function readProjectFile(path: string): Promise<string | null> {
+  if (path.startsWith('browser:')) {
+    if (!browserDirHandle) return null
+    const relative = path.replace(/^browser:[^/]+\//, '')
+    try {
+      const dirPath = parentDir(relative)
+      const fileName = relative.split('/').pop()!
+      const dir = await getBrowserDir(dirPath)
+      if (!dir) return null
+      const handle = await dir.getFileHandle(fileName)
+      const file = await handle.getFile()
+      return await file.text()
+    } catch {
+      return null
+    }
+  }
+  if (!isTauri()) return null
+  try {
+    const { invoke } = await import('@tauri-apps/api/core')
+    return await invoke<string>('read_text_file', { path })
+  } catch {
+    return null
+  }
 }
 
 function mimeForName(name: string): string {
@@ -272,17 +509,25 @@ export async function projectFilesToAssets(files: ProjectFile[]): Promise<{
   scripts: AssetItem[]
   assets: AssetItem[]
   sceneText: string | null
+  scenePath: string | null
   errors: string[]
+  folders: string[]
 }> {
   const scripts: AssetItem[] = []
   const assets: AssetItem[] = []
   const errors: string[] = []
+  const folders: string[] = []
   let sceneText: string | null = null
   let preferredScene: string | null = null
+  let scenePath: string | null = null
 
   for (const f of files) {
     const relativePath = f.relativePath || f.name
     try {
+      if (f.kind === 'folder') {
+        folders.push(relativePath.replace(/\\/g, '/'))
+        continue
+      }
       if (f.kind === 'script') {
         scripts.push({
           id: `file:${f.path}`,
@@ -303,8 +548,10 @@ export async function projectFilesToAssets(files: ProjectFile[]): Promise<{
         ) {
           preferredScene = f.content ?? null
           sceneText = preferredScene
+          scenePath = f.path
         } else if (!sceneText) {
           sceneText = f.content ?? null
+          scenePath = f.path
         }
         assets.push({
           id: `file:${f.path}`,
@@ -349,7 +596,20 @@ export async function projectFilesToAssets(files: ProjectFile[]): Promise<{
       )
     }
   }
-  return { scripts, assets, sceneText, errors }
+  return { scripts, assets, sceneText, scenePath, errors, folders }
+}
+
+/** Overwrite `.rg` files in the open project. Uses each script's existing path. */
+export async function writeProjectScripts(
+  projectPath: string,
+  scripts: AssetItem[],
+): Promise<void> {
+  for (const script of scripts) {
+    if (script.type !== 'script') continue
+    const rel = script.relativePath ?? `scripts/${script.name}`
+    const target = script.path ?? joinProjectPath(projectPath, rel)
+    await writeProjectFile(target, script.content ?? '')
+  }
 }
 
 export function joinProjectPath(projectPath: string, fileName: string): string {

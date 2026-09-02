@@ -1,8 +1,9 @@
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
+use crate::host::HostEffect;
 use crate::parser::*;
 use crate::{RuntimeError, Span};
 
@@ -12,8 +13,22 @@ type ModuleRef = Rc<RefCell<Module>>;
 type StructDefRef = Rc<StructDef>;
 type EnumDefRef = Rc<EnumDef>;
 
+/// One entity in the play world, for `strata.find`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct WorldEntry {
+  pub name: String,
+  pub x: f64,
+  pub y: f64,
+}
+
 pub trait ModuleResolver {
-  fn resolve(&self, name: &str) -> Option<String>;
+  fn resolve(&self, name: &str) -> Option<String> {
+    self.resolve_all(name).into_iter().next().map(|(_, src)| src)
+  }
+
+  /// Every source that contributes to `name`: filename match and/or `mod name`.
+  /// Duplicate map keys (`utils` / `utils.rg`) are collapsed. Order is stable.
+  fn resolve_all(&self, name: &str) -> Vec<(String, String)>;
 }
 
 pub struct HashMapResolver {
@@ -27,9 +42,76 @@ impl HashMapResolver {
 }
 
 impl ModuleResolver for HashMapResolver {
-  fn resolve(&self, name: &str) -> Option<String> {
-    self.sources.get(name).cloned()
+  fn resolve_all(&self, name: &str) -> Vec<(String, String)> {
+    crate::stdlib::merge(name, collect_named_sources(&self.sources, name))
   }
+}
+
+/// In-memory sources plus optional sibling-file lookup (Play host + CLI).
+pub struct CombinedResolver {
+  map: HashMapResolver,
+  file: Option<FileModuleResolver>,
+}
+
+impl CombinedResolver {
+  pub fn new(sources: HashMap<String, String>, file_base: Option<PathBuf>) -> Self {
+    Self {
+      map: HashMapResolver::new(sources),
+      file: file_base.map(FileModuleResolver::new),
+    }
+  }
+}
+
+impl ModuleResolver for CombinedResolver {
+  fn resolve_all(&self, name: &str) -> Vec<(String, String)> {
+    if crate::stdlib::is_embedded_stdlib(name) {
+      return crate::stdlib::resolve(name);
+    }
+    let mut out = self.map.resolve_all(name);
+    let mut seen: HashSet<String> = out.iter().map(|(_, src)| src.clone()).collect();
+    if let Some(file) = &self.file {
+      for (key, src) in file.resolve_all(name) {
+        if seen.insert(src.clone()) {
+          out.push((key, src));
+        }
+      }
+    }
+    out
+  }
+}
+
+fn collect_named_sources(sources: &HashMap<String, String>, name: &str) -> Vec<(String, String)> {
+  let stem = name.strip_suffix(".rg").unwrap_or(name);
+  let mut keys: Vec<&String> = sources.keys().collect();
+  keys.sort_by(|a, b| {
+    b.ends_with(".rg")
+      .cmp(&a.ends_with(".rg"))
+      .then_with(|| a.cmp(b))
+  });
+  let mut out = Vec::new();
+  let mut seen = HashSet::new();
+  for key in keys {
+    let Some(source) = sources.get(key) else {
+      continue;
+    };
+    let key_stem = key.strip_suffix(".rg").unwrap_or(key.as_str());
+    let filename_hit = key_stem.eq_ignore_ascii_case(stem);
+    if !filename_hit && !crate::parser::source_has_mod(source, name) {
+      continue;
+    }
+    // `utils` / `utils.rg` / `scripts.utils` are aliases of one file. Last
+    // segment so a dotted relative path does not look like a second module.
+    let identity = key_stem
+      .rsplit(['.', '/', '\\'])
+      .next()
+      .unwrap_or(key_stem)
+      .to_lowercase();
+    if !seen.insert(identity) {
+      continue;
+    }
+    out.push((key.clone(), source.clone()));
+  }
+  out
 }
 
 pub struct FileModuleResolver {
@@ -43,14 +125,34 @@ impl FileModuleResolver {
 }
 
 impl ModuleResolver for FileModuleResolver {
-  fn resolve(&self, name: &str) -> Option<String> {
+  fn resolve_all(&self, name: &str) -> Vec<(String, String)> {
+    let std = crate::stdlib::resolve(name);
+    if !std.is_empty() {
+      return std;
+    }
     #[cfg(target_arch = "wasm32")]
     {
       let _ = (&self.base, name);
-      return None;
+      return Vec::new();
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
+      let stem = name.strip_suffix(".rg").unwrap_or(name);
+      let mut out = Vec::new();
+      let mut seen = HashSet::new();
+      let mut push = |path: PathBuf, source: String| {
+        let id = path.canonicalize().unwrap_or_else(|_| path.clone());
+        if !seen.insert(id) {
+          return;
+        }
+        let key = path
+          .file_name()
+          .and_then(|n| n.to_str())
+          .unwrap_or(name)
+          .to_string();
+        out.push((key, source));
+      };
+
       let dotted = name.replace('.', std::path::MAIN_SEPARATOR_STR);
       let candidates = [
         self.base.join(format!("{}.rg", name)),
@@ -60,12 +162,35 @@ impl ModuleResolver for FileModuleResolver {
         self.base.join(name).join("lib.rg"),
         self.base.join(name).join("main.rg"),
       ];
-      for path in &candidates {
+      for path in candidates {
         if path.exists() {
-          return std::fs::read_to_string(path).ok();
+          if let Ok(source) = std::fs::read_to_string(&path) {
+            push(path, source);
+          }
         }
       }
-      None
+      if let Ok(entries) = std::fs::read_dir(&self.base) {
+        let mut paths: Vec<PathBuf> = entries
+          .flatten()
+          .map(|e| e.path())
+          .filter(|p| p.extension().and_then(|e| e.to_str()) == Some("rg"))
+          .collect();
+        paths.sort();
+        for path in paths {
+          let Ok(source) = std::fs::read_to_string(&path) else {
+            continue;
+          };
+          let file_stem = path
+            .file_stem()
+            .and_then(|n| n.to_str())
+            .unwrap_or("");
+          if file_stem.eq_ignore_ascii_case(stem) || crate::parser::source_has_mod(&source, name)
+          {
+            push(path, source);
+          }
+        }
+      }
+      out
     }
   }
 }
@@ -91,6 +216,7 @@ impl Module {
 pub struct StructDef {
   pub name: String,
   pub fields: Vec<String>,
+  pub defaults: Vec<(String, Expr)>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -102,10 +228,19 @@ pub struct EnumDef {
 #[derive(Debug, Clone, PartialEq)]
 pub struct EnumVariantDef {
   pub arity: usize,
+  pub field_names: Vec<String>,
 }
 
 fn runtime_err(message: impl Into<String>, span: Span) -> RuntimeError {
   RuntimeError { message: message.into(), span }
+}
+
+fn value_as_float(v: Option<&Value>) -> Option<f64> {
+  match v {
+    Some(Value::Float(n)) => Some(*n),
+    Some(Value::Int(n)) => Some(*n as f64),
+    _ => None,
+  }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -125,6 +260,7 @@ pub enum Value {
   Struct { name: String, fields: Rc<RefCell<HashMap<String, Value>>> },
   StructType(StructDefRef),
   EnumType(EnumDefRef),
+  Signal { name: String, arity: usize },
 }
 
 impl Value {
@@ -139,12 +275,15 @@ impl Value {
       Value::Range(start, end, inclusive) => {
         if *inclusive { start <= end } else { start < end }
       }
-      Value::Enum { value, .. } => value.is_some(),
+      Value::Enum { module, variant, .. } => {
+        !(module == "Option" && variant == "None" || module == "Result" && variant == "Err")
+      }
       Value::Module(_) => true,
       Value::NativeFn { .. } => true,
       Value::Struct { .. } => true,
       Value::StructType(_) => true,
       Value::EnumType(_) => true,
+      Value::Signal { .. } => true,
       Value::None => false,
       Value::Void => false,
     }
@@ -167,6 +306,7 @@ impl Value {
       Value::Struct { name, .. } => name.clone(),
       Value::StructType(s) => s.name.clone(),
       Value::EnumType(e) => e.name.clone(),
+      Value::Signal { .. } => "Signal".to_string(),
     }
   }
 
@@ -200,6 +340,7 @@ impl Value {
       }
       Value::StructType(s) => format!("struct {}", s.name),
       Value::EnumType(e) => format!("enum {}", e.name),
+      Value::Signal { name, .. } => format!("signal {name}"),
     }
   }
 }
@@ -212,10 +353,36 @@ pub struct EvalContext {
   pub stdlib: HashMap<String, HashMap<String, Value>>,
   pub structs: HashMap<String, StructDefRef>,
   pub enums: HashMap<String, EnumDefRef>,
+  /// Child type → parent type (`class Child extends Parent`).
+  parents: HashMap<String, String>,
+  /// Trait name → signal declarations (for `impl` to expose `.emit`).
+  trait_signals: HashMap<String, Vec<SignalDecl>>,
+  /// Type name → traits it implements (class header, nested impl, `impl Trait for Type`).
+  type_traits: HashMap<String, Vec<String>>,
+  /// Parent type of the method currently executing, for `super.method`.
+  super_type: Option<String>,
+  effects: Vec<HostEffect>,
   module_resolver: Rc<RefCell<dyn ModuleResolver>>,
   loaded_modules: Rc<RefCell<HashMap<String, ModuleRef>>>,
+  /// Held keys CSV for `input.held` (set by the play host each tick).
+  keys: String,
+  /// Just-pressed keys CSV for `input.pressed`.
+  pressed: String,
+  /// This entity's scene name for `strata.find`.
+  find_self_name: String,
+  find_self_x: f64,
+  find_self_y: f64,
+  /// Other (and self) entities this tick, world coords.
+  find_world: Vec<WorldEntry>,
   /// Set when `return` runs inside a `match` expression so the enclosing function exits.
   pending_return: Option<Value>,
+  /// Host modules (`strata`, `input`, `io`) the program imported.
+  imported_host: HashSet<String>,
+  /// `@node` class instance for this program, if any.
+  node_class: Option<String>,
+  node_instance: Option<Value>,
+  /// Function tables of modules whose bodies are on the call stack.
+  module_fns: Vec<HashMap<String, FnDecl>>,
 }
 
 pub struct Environment {
@@ -250,6 +417,32 @@ impl Environment {
     None
   }
 
+  /// Locals / params in this call (everything above the module scope).
+  fn get_local(&self, name: &str) -> Option<Value> {
+    if self.scopes.len() < 2 {
+      return None;
+    }
+    for scope in self.scopes.iter().skip(1).rev() {
+      if let Some(v) = scope.get(name) {
+        return Some(v.clone());
+      }
+    }
+    None
+  }
+
+  fn set_local(&mut self, name: &str, value: Value) -> bool {
+    if self.scopes.len() < 2 {
+      return false;
+    }
+    for scope in self.scopes.iter_mut().skip(1).rev() {
+      if scope.contains_key(name) {
+        scope.insert(name.to_string(), value);
+        return true;
+      }
+    }
+    false
+  }
+
   pub fn set(&mut self, name: &str, value: Value, span: Span) -> Result<(), RuntimeError> {
     for scope in self.scopes.iter_mut().rev() {
       if scope.contains_key(name) {
@@ -267,6 +460,12 @@ impl EvalContext {
   }
 
   pub fn with_resolver(resolver: Rc<RefCell<dyn ModuleResolver>>) -> Self {
+    let mut ctx = Self::unpreloaded(resolver);
+    let _ = ctx.preload_embedded();
+    ctx
+  }
+
+  fn unpreloaded(resolver: Rc<RefCell<dyn ModuleResolver>>) -> Self {
     let mut ctx = Self {
       stdout: String::new(),
       env: Environment::new(),
@@ -275,48 +474,50 @@ impl EvalContext {
       stdlib: HashMap::new(),
       structs: HashMap::new(),
       enums: HashMap::new(),
+      parents: HashMap::new(),
+      trait_signals: HashMap::new(),
+      type_traits: HashMap::new(),
+      super_type: None,
+      effects: Vec::new(),
       module_resolver: resolver,
       loaded_modules: Rc::new(RefCell::new(HashMap::new())),
+      keys: String::new(),
+      pressed: String::new(),
+      find_self_name: String::new(),
+      find_self_x: 0.0,
+      find_self_y: 0.0,
+      find_world: Vec::new(),
       pending_return: None,
+      node_class: None,
+      node_instance: None,
+      imported_host: HashSet::new(),
+      module_fns: Vec::new(),
     };
     ctx.init_stdlib();
     ctx
   }
 
+  fn preload_embedded(&mut self) -> Result<(), RuntimeError> {
+    let span = Span::default();
+    self.load_module("option", span)?;
+    self.load_module("result", span)?;
+    self.load_module("vec", span)?;
+    if let Some(opt) = self.enums.get("Option").cloned() {
+      self.enums.insert("option".to_string(), opt);
+    }
+    if let Some(res) = self.enums.get("Result").cloned() {
+      self.enums.insert("result".to_string(), res);
+    }
+    Ok(())
+  }
+
   fn init_stdlib(&mut self) {
-    let mut str_mod = HashMap::new();
-    str_mod.insert("contains".to_string(), Value::String("str.contains".to_string()));
-    str_mod.insert("starts_with".to_string(), Value::String("str.starts_with".to_string()));
-    str_mod.insert("ends_with".to_string(), Value::String("str.ends_with".to_string()));
-    str_mod.insert("length".to_string(), Value::String("str.length".to_string()));
-    str_mod.insert("is_empty".to_string(), Value::String("str.is_empty".to_string()));
-    str_mod.insert("repeat".to_string(), Value::String("str.repeat".to_string()));
-    str_mod.insert("upper".to_string(), Value::String("str.upper".to_string()));
-    str_mod.insert("lower".to_string(), Value::String("str.lower".to_string()));
-    str_mod.insert("trim".to_string(), Value::String("str.trim".to_string()));
-    self.stdlib.insert("str".to_string(), str_mod);
-    self.stdlib.insert("math".to_string(), HashMap::new());
-    self.stdlib.insert("checks".to_string(), HashMap::new());
+    self.stdlib.insert("__str".to_string(), HashMap::new());
+    self.stdlib.insert("__math".to_string(), HashMap::new());
+    self.stdlib.insert("strata".to_string(), HashMap::new());
+    self.stdlib.insert("input".to_string(), HashMap::new());
     self.stdlib.insert("io".to_string(), HashMap::new());
     self.stdlib.insert("Array".to_string(), HashMap::new());
-    self.stdlib.insert("option".to_string(), HashMap::new());
-    self.stdlib.insert("Option".to_string(), HashMap::new());
-    self.stdlib.insert("result".to_string(), HashMap::new());
-    self.stdlib.insert("Result".to_string(), HashMap::new());
-
-    let mut option_variants = HashMap::new();
-    option_variants.insert("Some".to_string(), EnumVariantDef { arity: 1 });
-    option_variants.insert("None".to_string(), EnumVariantDef { arity: 0 });
-    let option_def = Rc::new(EnumDef { name: "Option".to_string(), variants: option_variants });
-    self.enums.insert("Option".to_string(), option_def.clone());
-    self.enums.insert("option".to_string(), option_def);
-
-    let mut result_variants = HashMap::new();
-    result_variants.insert("Ok".to_string(), EnumVariantDef { arity: 1 });
-    result_variants.insert("Err".to_string(), EnumVariantDef { arity: 1 });
-    let result_def = Rc::new(EnumDef { name: "Result".to_string(), variants: result_variants });
-    self.enums.insert("Result".to_string(), result_def.clone());
-    self.enums.insert("result".to_string(), result_def);
   }
 
   pub fn run(&mut self, program: &[Item]) -> Result<Value, RuntimeError> {
@@ -330,6 +531,7 @@ impl EvalContext {
 
   /// Register declarations and evaluate top-level consts/vars without calling `main`.
   pub fn load_program(&mut self, program: &[Item]) -> Result<(), RuntimeError> {
+    let mut node_class_name: Option<String> = None;
     // First pass: register declarations
     for item in program {
       match item {
@@ -337,28 +539,67 @@ impl EvalContext {
           self.functions.insert(f.name.clone(), f.clone());
         }
         Item::StructDecl(s) => {
-          let fields = s.fields.iter().map(|(n, _)| n.clone()).collect();
-          self.structs.insert(s.name.clone(), Rc::new(StructDef { name: s.name.clone(), fields }));
+          let fields = s.fields.iter().map(|f| f.name.clone()).collect();
+          self.structs.insert(s.name.clone(), Rc::new(StructDef {
+            name: s.name.clone(),
+            fields,
+            defaults: Vec::new(),
+          }));
+        }
+        Item::ClassDecl(c) => {
+          self.register_class(c);
+          if c.is_node {
+            node_class_name = Some(c.name.clone());
+          }
+        }
+        Item::TraitDecl(t) => {
+          self.register_trait_decl(t);
         }
         Item::EnumDecl(e) => {
           let mut variants = HashMap::new();
           for v in &e.variants {
-            variants.insert(v.name.clone(), EnumVariantDef { arity: v.value_types.len() });
+            variants.insert(
+              v.name.clone(),
+              EnumVariantDef {
+                arity: v.value_types.len(),
+                field_names: v.field_names.clone(),
+              },
+            );
           }
           self.enums.insert(e.name.clone(), Rc::new(EnumDef { name: e.name.clone(), variants }));
         }
-        Item::ImplDecl { type_name, methods } => {
+        Item::ImplDecl {
+          type_name,
+          trait_name,
+          methods,
+          ..
+        } => {
           let entry = self.methods.entry(type_name.clone()).or_insert_with(HashMap::new);
           for m in methods {
             entry.insert(m.name.clone(), m.clone());
           }
+          if let Some(t) = trait_name {
+            self.record_type_trait(type_name, t);
+          }
         }
         Item::Import(i) => {
-          self.eval_import(i, Span::default())?;
+          self.eval_import(i, i.span)?;
+        }
+        Item::SignalDecl(s) => {
+          self.env.define(
+            &s.name,
+            Value::Signal {
+              name: s.name.clone(),
+              arity: s.params.len(),
+            },
+          );
         }
         _ => {}
       }
     }
+
+    self.bind_all_trait_signals();
+    self.apply_inheritance(Span::default())?;
 
     // Second pass: evaluate top-level consts and vars
     for item in program {
@@ -377,7 +618,276 @@ impl EvalContext {
         _ => {}
       }
     }
+    if let Some(name) = node_class_name {
+      let inst = self.instantiate_class(&name, Span::default())?;
+      self.node_class = Some(name);
+      self.node_instance = Some(inst);
+    }
     Ok(())
+  }
+
+  fn register_class(&mut self, c: &ClassDecl) {
+    let fields = c.fields.iter().map(|f| f.name.clone()).collect();
+    self.structs.insert(
+      c.name.clone(),
+      Rc::new(StructDef {
+        name: c.name.clone(),
+        fields,
+        defaults: c.defaults.clone(),
+      }),
+    );
+    if let Some(p) = &c.parent {
+      self.parents.insert(c.name.clone(), p.clone());
+    }
+    let entry = self.methods.entry(c.name.clone()).or_insert_with(HashMap::new);
+    for m in c.all_methods() {
+      entry.insert(m.name.clone(), m.clone());
+    }
+    for t in c.implemented_traits() {
+      self.record_type_trait(&c.name, &t);
+    }
+  }
+
+  fn register_trait_decl(&mut self, t: &TraitDecl) {
+    self.trait_signals.insert(t.name.clone(), t.signals.clone());
+  }
+
+  fn record_type_trait(&mut self, type_name: &str, trait_name: &str) {
+    let entry = self.type_traits.entry(type_name.to_string()).or_default();
+    if !entry.iter().any(|n| n == trait_name) {
+      entry.push(trait_name.to_string());
+    }
+  }
+
+  fn define_trait_signals(&mut self, trait_name: &str) {
+    let Some(sigs) = self.trait_signals.get(trait_name).cloned() else {
+      return;
+    };
+    for s in sigs {
+      if self.env.get(&s.name).is_some() {
+        continue;
+      }
+      self.env.define(
+        &s.name,
+        Value::Signal {
+          name: s.name.clone(),
+          arity: s.params.len(),
+        },
+      );
+    }
+  }
+
+  fn bind_all_trait_signals(&mut self) {
+    let traits: Vec<String> = self
+      .type_traits
+      .values()
+      .flatten()
+      .cloned()
+      .collect();
+    for t in traits {
+      self.define_trait_signals(&t);
+    }
+  }
+
+  fn apply_inheritance(&mut self, span: Span) -> Result<(), RuntimeError> {
+    let names: Vec<String> = self.parents.keys().cloned().collect();
+    let mut done = HashSet::new();
+    let mut stack = Vec::new();
+    for name in names {
+      self.flatten_type(&name, span, &mut done, &mut stack)?;
+    }
+    Ok(())
+  }
+
+  fn flatten_type(
+    &mut self,
+    name: &str,
+    span: Span,
+    done: &mut HashSet<String>,
+    stack: &mut Vec<String>,
+  ) -> Result<(), RuntimeError> {
+    if done.contains(name) {
+      return Ok(());
+    }
+    if stack.iter().any(|n| n == name) {
+      return Err(runtime_err(
+        format!("cycle in class inheritance at '{name}'"),
+        span,
+      ));
+    }
+    let Some(parent) = self.parents.get(name).cloned() else {
+      done.insert(name.to_string());
+      return Ok(());
+    };
+    if !self.structs.contains_key(&parent) {
+      if self.methods.contains_key(&parent) {
+        done.insert(name.to_string());
+        return Ok(());
+      }
+      return Err(runtime_err(
+        format!("class '{name}' extends unknown type '{parent}'"),
+        span,
+      ));
+    }
+    if self.enums.contains_key(&parent) {
+      return Err(runtime_err(
+        format!("class '{name}' cannot extend enum '{parent}'"),
+        span,
+      ));
+    }
+    stack.push(name.to_string());
+    self.flatten_type(&parent, span, done, stack)?;
+    stack.pop();
+    let parent_def = self
+      .structs
+      .get(&parent)
+      .cloned()
+      .ok_or_else(|| runtime_err(format!("unknown type '{parent}'"), span))?;
+    let child_def = self
+      .structs
+      .get(name)
+      .cloned()
+      .ok_or_else(|| runtime_err(format!("unknown type '{name}'"), span))?;
+    let mut fields = parent_def.fields.clone();
+    for f in &child_def.fields {
+      if !fields.iter().any(|p| p == f) {
+        fields.push(f.clone());
+      }
+    }
+    let mut defaults = parent_def.defaults.clone();
+    for (n, e) in &child_def.defaults {
+      if let Some(slot) = defaults.iter_mut().find(|(k, _)| k == n) {
+        *slot = (n.clone(), e.clone());
+      } else {
+        defaults.push((n.clone(), e.clone()));
+      }
+    }
+    self.structs.insert(
+      name.to_string(),
+      Rc::new(StructDef {
+        name: name.to_string(),
+        fields,
+        defaults,
+      }),
+    );
+    done.insert(name.to_string());
+    Ok(())
+  }
+
+  fn lookup_method(&self, type_name: &str, name: &str) -> Option<(String, FnDecl)> {
+    let mut current = Some(type_name.to_string());
+    let mut seen = HashSet::new();
+    while let Some(ty) = current {
+      if !seen.insert(ty.clone()) {
+        break;
+      }
+      if let Some(decl) = self.methods.get(&ty).and_then(|m| m.get(name)) {
+        return Some((ty, decl.clone()));
+      }
+      current = self.parents.get(&ty).cloned();
+    }
+    None
+  }
+
+  fn call_type_method(
+    &mut self,
+    type_name: &str,
+    object: &Value,
+    name: &str,
+    args: Vec<Value>,
+    span: Span,
+  ) -> Result<Option<Value>, RuntimeError> {
+    let Some((defined_on, decl)) = self.lookup_method(type_name, name) else {
+      return Ok(None);
+    };
+    let prev = self.super_type.take();
+    self.super_type = self.parents.get(&defined_on).cloned();
+    let result = self.call_method(&decl, object.clone(), args, span);
+    self.super_type = prev;
+    result.map(Some)
+  }
+
+  fn call_method(
+    &mut self,
+    decl: &FnDecl,
+    object: Value,
+    extra: Vec<Value>,
+    span: Span,
+  ) -> Result<Value, RuntimeError> {
+    let params = crate::parser::params_after_self(&decl.params);
+    if extra.len() != params.len() {
+      return Err(runtime_err(
+        format!("{} expected {} args, got {}", decl.name, params.len(), extra.len()),
+        span,
+      ));
+    }
+    self.env.push_scope();
+    self.env.define("self", object);
+    for (param, arg) in params.iter().zip(extra) {
+      self.env.define(&param.name, arg);
+    }
+    let result = self.exec_block(&decl.body)?;
+    self.env.pop_scope();
+    match result {
+      ControlFlow::Return(v) => Ok(v),
+      ControlFlow::Normal => Ok(Value::Void),
+      _ => Err(runtime_err("break/continue outside loop", span)),
+    }
+  }
+
+  fn lookup_ident(&self, name: &str) -> Option<Value> {
+    if let Some(v) = self.env.get_local(name) {
+      return Some(v);
+    }
+    if let Some(v) = self.field_on_self(name) {
+      return Some(v);
+    }
+    self.env.get(name)
+  }
+
+  fn field_on_self(&self, name: &str) -> Option<Value> {
+    let Value::Struct { fields, .. } = self.env.get("self")? else {
+      return None;
+    };
+    fields.borrow().get(name).cloned()
+  }
+
+  fn set_field_on_self(&self, name: &str, value: Value) -> bool {
+    let Some(Value::Struct { fields, .. }) = self.env.get("self") else {
+      return false;
+    };
+    let mut map = fields.borrow_mut();
+    if !map.contains_key(name) {
+      return false;
+    }
+    map.insert(name.to_string(), value);
+    true
+  }
+
+  fn call_super(
+    &mut self,
+    name: &str,
+    args: &[Expr],
+    span: Span,
+  ) -> Result<Value, RuntimeError> {
+    let parent = self.super_type.clone().ok_or_else(|| {
+      runtime_err(
+        "super is only valid in a method of a class that extends another".to_string(),
+        span,
+      )
+    })?;
+    let object = self.env.get("self").ok_or_else(|| {
+      runtime_err("super requires self".to_string(), span)
+    })?;
+    let arg_values: Result<Vec<_>, _> = args.iter().map(|a| self.eval_expr(a)).collect();
+    let arg_values = arg_values?;
+    match self.call_type_method(&parent, &object, name, arg_values, span)? {
+      Some(v) => Ok(v),
+      None => Err(runtime_err(
+        format!("{parent} has no method '{name}'"),
+        span,
+      )),
+    }
   }
 
   /// Call a registered function by name (e.g. `on_ready`, `on_update`).
@@ -389,16 +899,286 @@ impl EvalContext {
     self.functions.contains_key(name)
   }
 
+  pub fn has_node(&self) -> bool {
+    self.node_instance.is_some()
+  }
+
+  fn resolve_hook_name(&self, hook: &str) -> String {
+    if hook == "on_ready" {
+      if let Some(ty) = &self.node_class {
+        if self.has_own_method(ty, "on_create") {
+          return "on_create".to_string();
+        }
+        if self.has_own_method(ty, "on_ready") {
+          return "on_ready".to_string();
+        }
+        if self.lookup_method(ty, "on_create").is_some() {
+          return "on_create".to_string();
+        }
+      }
+    }
+    hook.to_string()
+  }
+
+  fn has_own_method(&self, ty: &str, name: &str) -> bool {
+    self.methods
+      .get(ty)
+      .is_some_and(|m| m.contains_key(name))
+  }
+
+  pub fn has_hook(&self, name: &str) -> bool {
+    if let Some(ty) = &self.node_class {
+      let hook = self.resolve_hook_name(name);
+      self.lookup_method(ty, &hook).is_some()
+    } else {
+      self.has_fn(name)
+    }
+  }
+
+  pub fn call_hook(&mut self, name: &str, extra: Vec<Value>) -> Result<Value, RuntimeError> {
+    if let (Some(ty), Some(inst)) = (self.node_class.clone(), self.node_instance.clone()) {
+      let hook = self.resolve_hook_name(name);
+      match self.call_type_method(&ty, &inst, &hook, extra, Span::default())? {
+        Some(v) => Ok(v),
+        None => Ok(Value::Void),
+      }
+    } else {
+      self.call(name, extra)
+    }
+  }
+
+  /// Script-tab Run: if this file is not `@node`, instantiate the first class that
+  /// defines `on_create` or `on_ready` so those methods can be called.
+  pub fn adopt_preview_class(&mut self, program: &[Item]) -> Result<(), RuntimeError> {
+    if self.node_instance.is_some() {
+      return Ok(());
+    }
+    fn walk<'a>(items: &'a [Item], out: &mut Vec<&'a ClassDecl>) {
+      for item in items {
+        match item {
+          Item::ClassDecl(c) => out.push(c),
+          Item::Mod(m) => walk(&m.items, out),
+          _ => {}
+        }
+      }
+    }
+    let mut classes = Vec::new();
+    walk(program, &mut classes);
+    for c in classes {
+      if self.has_own_method(&c.name, "on_create") || self.has_own_method(&c.name, "on_ready") {
+        let inst = self.instantiate_class(&c.name, Span::default())?;
+        self.node_class = Some(c.name.clone());
+        self.node_instance = Some(inst);
+        return Ok(());
+      }
+    }
+    Ok(())
+  }
+
+  fn ready_extra_args(&self, name: &str, x: f64, y: f64) -> Vec<Value> {
+    let n = if let Some(ty) = &self.node_class {
+      let hook = self.resolve_hook_name("on_ready");
+      self
+        .lookup_method(ty, &hook)
+        .map(|(_, decl)| crate::parser::params_after_self(&decl.params).len())
+        .unwrap_or(0)
+    } else if let Some(decl) = self.functions.get("on_ready") {
+      decl.params.len()
+    } else {
+      0
+    };
+    match n {
+      0 => Vec::new(),
+      1 => vec![Value::String(name.to_string())],
+      2 => vec![Value::String(name.to_string()), Value::Float(x)],
+      _ => vec![
+        Value::String(name.to_string()),
+        Value::Float(x),
+        Value::Float(y),
+      ],
+    }
+  }
+
+  /// Script-tab Run: `on_create` / `on_ready` on a class, or a free `on_ready`.
+  pub fn run_ready_preview(
+    &mut self,
+    name: &str,
+    x: f64,
+    y: f64,
+  ) -> Result<Value, RuntimeError> {
+    self.sync_node_transform(name, x, y, 0.0);
+    if self.has_node() {
+      if !self.has_hook("on_ready") {
+        return Err(runtime_err(
+          "no on_ready / on_create method on this class".to_string(),
+          Span::default(),
+        ));
+      }
+      let extra = self.ready_extra_args(name, x, y);
+      return self.call_hook("on_ready", extra);
+    }
+    if self.has_fn("on_ready") {
+      let extra = self.ready_extra_args(name, x, y);
+      return self.call("on_ready", extra);
+    }
+    Err(runtime_err(
+      "no on_ready hook (free function or class method)".to_string(),
+      Span::default(),
+    ))
+  }
+
+  pub fn sync_node_transform(&mut self, name: &str, x: f64, y: f64, z: f64) {
+    let Some(Value::Struct { fields, .. }) = &self.node_instance else {
+      return;
+    };
+    let mut map = fields.borrow_mut();
+    map.insert("name".to_string(), Value::String(name.to_string()));
+    map.insert("x".to_string(), Value::Float(x));
+    map.insert("y".to_string(), Value::Float(y));
+    map.insert("z".to_string(), Value::Float(z));
+  }
+
+  pub fn read_node_transform(&self) -> Option<(f64, f64, f64)> {
+    let Value::Struct { fields, .. } = self.node_instance.as_ref()? else {
+      return None;
+    };
+    let map = fields.borrow();
+    Some((
+      value_as_float(map.get("x"))?,
+      value_as_float(map.get("y"))?,
+      value_as_float(map.get("z")).unwrap_or(0.0),
+    ))
+  }
+
+  fn instantiate_class(&mut self, name: &str, span: Span) -> Result<Value, RuntimeError> {
+    let def = self
+      .structs
+      .get(name)
+      .cloned()
+      .ok_or_else(|| runtime_err(format!("undefined struct '{name}'"), span))?;
+    let field_names = def.fields.clone();
+    let defaults = def.defaults.clone();
+    let mut values = HashMap::new();
+    for field in field_names {
+      if let Some((_, expr)) = defaults.iter().find(|(n, _)| n == &field) {
+        values.insert(field, self.eval_expr(expr)?);
+      } else {
+        values.insert(field, Value::None);
+      }
+    }
+    Ok(Value::Struct {
+      name: name.to_string(),
+      fields: Rc::new(RefCell::new(values)),
+    })
+  }
+
+  /// Take host effects recorded since the last take (or since the context was created).
+  pub fn take_effects(&mut self) -> Vec<HostEffect> {
+    std::mem::take(&mut self.effects)
+  }
+
+  /// Bind this tick's held / just-pressed keys for `input.held` / `input.pressed`.
+  pub fn set_input(&mut self, keys: impl Into<String>, pressed: impl Into<String>) {
+    self.keys = keys.into();
+    self.pressed = pressed.into();
+  }
+
+  /// Bind this tick's world snapshot for `strata.find` (by name or nearest).
+  pub fn set_world(
+    &mut self,
+    self_name: impl Into<String>,
+    x: f64,
+    y: f64,
+    world: Vec<WorldEntry>,
+  ) {
+    self.find_self_name = self_name.into();
+    self.find_self_x = x;
+    self.find_self_y = y;
+    self.find_world = world;
+  }
+
+  fn find_by_name(&self, name: &str) -> Value {
+    if self.find_world.iter().any(|e| e.name == name) {
+      Value::String(name.to_string())
+    } else {
+      Value::None
+    }
+  }
+
+  fn find_nearest(&self) -> Value {
+    let mut best: Option<(&str, f64)> = None;
+    for e in &self.find_world {
+      if e.name == self.find_self_name
+        && (e.x - self.find_self_x).abs() < f64::EPSILON
+        && (e.y - self.find_self_y).abs() < f64::EPSILON
+      {
+        continue;
+      }
+      let dx = e.x - self.find_self_x;
+      let dy = e.y - self.find_self_y;
+      let d = dx * dx + dy * dy;
+      match best {
+        None => best = Some((e.name.as_str(), d)),
+        Some((_, bd)) if d < bd => best = Some((e.name.as_str(), d)),
+        _ => {}
+      }
+    }
+    match best {
+      Some((name, _)) => Value::String(name.to_string()),
+      None => Value::None,
+    }
+  }
+
+  /// Write Inspector overrides into module `var`s or the `@node` instance.
+  /// Unknown names and type mismatches are skipped.
+  pub fn apply_exports(
+    &mut self,
+    exports: &[crate::ExportField],
+    props: &HashMap<String, serde_json::Value>,
+  ) {
+    for field in exports {
+      let Some(raw) = props.get(&field.name) else {
+        continue;
+      };
+      let Some(value) = crate::export::value_from_json(&field.ty, raw) else {
+        continue;
+      };
+      if self.set_node_field(&field.name, value.clone()) {
+        continue;
+      }
+      let _ = self.env.set(&field.name, value, Span::default());
+    }
+  }
+
+  fn set_node_field(&self, name: &str, value: Value) -> bool {
+    let Some(Value::Struct { fields, .. }) = &self.node_instance else {
+      return false;
+    };
+    let mut map = fields.borrow_mut();
+    if !map.contains_key(name) {
+      return false;
+    }
+    map.insert(name.to_string(), value);
+    true
+  }
+
   fn eval_import(&mut self, import: &Import, span: Span) -> Result<(), RuntimeError> {
     if import.path.is_empty() {
       return Err(runtime_err("empty import path", span));
     }
     let module_name = &import.path[0];
 
-    // Native stdlib modules are already wired via call_qualified / enums.
-    if self.stdlib.contains_key(module_name) {
+    // Native host modules (`strata`, `input`, `io`) — require `import`.
+    // `import strata.Sprite` is the node type from `node.rg`, not a host fn.
+    if crate::stdlib::is_node_type_import(&import.path) {
+      self.load_module("node", span)?;
+      return Ok(());
+    }
+    if crate::stdlib::is_host_module(module_name) && !crate::stdlib::is_internal_host(module_name)
+    {
+      self.imported_host.insert(module_name.clone());
       if import.path.len() == 1 {
-        // import module; — no-op for native stdlib modules
+        // import strata; — allow strata.move etc.
       } else if import.is_from && import.path.len() == 2 {
         let item_name = &import.path[1];
         let alias = import.alias.as_ref().unwrap_or(item_name).clone();
@@ -488,46 +1268,150 @@ impl EvalContext {
         return Ok(m.clone());
       }
     }
-    let source = self
-      .module_resolver
-      .borrow()
-      .resolve(name)
-      .ok_or_else(|| runtime_err(format!("module '{}' not found", name), span))?;
-    let tokens = crate::lexer::Lexer::new(&source)
-      .tokenize()
-      .map_err(|e| runtime_err(e, span))?;
-    let program = crate::parser::Parser::new(tokens)
-      .parse()
-      .map_err(|e| runtime_err(e, span))?;
+    let parts = self.module_resolver.borrow().resolve_all(name);
+    if parts.is_empty() {
+      return Err(runtime_err(format!("module '{}' not found", name), span));
+    }
 
     let mut module = Module::new();
-    let mut module_ctx = EvalContext::with_resolver(self.module_resolver.clone());
+    let mut module_ctx = EvalContext::unpreloaded(self.module_resolver.clone());
     module_ctx.loaded_modules = self.loaded_modules.clone();
 
-    for item in &program {
+    for (_key, source) in &parts {
+      let tokens = crate::lexer::Lexer::new(source)
+        .tokenize()
+        .map_err(|e| runtime_err(e, span))?;
+      let program = crate::parser::Parser::new(tokens)
+        .parse()
+        .map_err(|e| runtime_err(e, span))?;
+      let body = crate::parser::module_items(&program, name);
+      let from_mod = crate::parser::module_body_from_mod(&program, name);
+      self.ingest_module_items(&mut module, &mut module_ctx, &body, name, from_mod, span)?;
+    }
+
+    let rc = Rc::new(RefCell::new(module));
+    self.loaded_modules.borrow_mut().insert(name.to_string(), rc.clone());
+    Ok(rc)
+  }
+
+  fn import_type_chain(&mut self, src: &EvalContext, name: &str) {
+    let mut current = Some(name.to_string());
+    let mut seen = HashSet::new();
+    let mut exported = true;
+    while let Some(ty) = current {
+      if !seen.insert(ty.clone()) {
+        break;
+      }
+      if exported {
+        if let Some(def) = src.structs.get(&ty) {
+          self.structs.insert(ty.clone(), def.clone());
+        }
+        exported = false;
+      }
+      if let Some(parent) = src.parents.get(&ty) {
+        self.parents.insert(ty.clone(), parent.clone());
+      }
+      if let Some(methods) = src.methods.get(&ty) {
+        let entry = self.methods.entry(ty.clone()).or_insert_with(HashMap::new);
+        for (k, v) in methods {
+          entry.insert(k.clone(), v.clone());
+        }
+      }
+      if let Some(traits) = src.type_traits.get(&ty) {
+        for t in traits {
+          self.record_type_trait(&ty, t);
+        }
+      }
+      current = src.parents.get(&ty).cloned();
+    }
+  }
+
+  fn ingest_module_items(
+    &mut self,
+    module: &mut Module,
+    module_ctx: &mut EvalContext,
+    body: &[&Item],
+    module_name: &str,
+    from_mod: bool,
+    span: Span,
+  ) -> Result<(), RuntimeError> {
+    for item in body {
+      let exported = crate::parser::item_is_exported(item, from_mod);
       match item {
         Item::FnDecl(f) => {
-          module.functions.insert(f.name.clone(), f.clone());
+          if module_ctx.functions.contains_key(&f.name) {
+            return Err(runtime_err(
+              format!(
+                "duplicate export '{}' in module '{}'",
+                f.name, module_name
+              ),
+              span,
+            ));
+          }
           module_ctx.functions.insert(f.name.clone(), f.clone());
+          if exported {
+            module.functions.insert(f.name.clone(), f.clone());
+          }
         }
         Item::StructDecl(s) => {
-          let fields = s.fields.iter().map(|(n, _)| n.clone()).collect();
+          if module_ctx.structs.contains_key(&s.name) {
+            return Err(runtime_err(
+              format!(
+                "duplicate export '{}' in module '{}'",
+                s.name, module_name
+              ),
+              span,
+            ));
+          }
+          let fields = s.fields.iter().map(|f| f.name.clone()).collect();
           let def = Rc::new(StructDef {
             name: s.name.clone(),
             fields,
+            defaults: Vec::new(),
           });
           module_ctx.structs.insert(s.name.clone(), def.clone());
-          module
-            .values
-            .insert(s.name.clone(), Value::StructType(def));
+          if exported {
+            self.structs.insert(s.name.clone(), def.clone());
+            module
+              .values
+              .insert(s.name.clone(), Value::StructType(def));
+          }
+        }
+        Item::ClassDecl(c) => {
+          if module_ctx.structs.contains_key(&c.name) {
+            return Err(runtime_err(
+              format!(
+                "duplicate export '{}' in module '{}'",
+                c.name, module_name
+              ),
+              span,
+            ));
+          }
+          module_ctx.register_class(c);
+        }
+        Item::TraitDecl(t) => {
+          module_ctx.register_trait_decl(t);
+          if exported {
+            self.register_trait_decl(t);
+          }
         }
         Item::EnumDecl(e) => {
+          if module_ctx.enums.contains_key(&e.name) {
+            return Err(runtime_err(
+              format!(
+                "duplicate export '{}' in module '{}'",
+                e.name, module_name
+              ),
+              span,
+            ));
+          }
           let mut variants = HashMap::new();
           for v in &e.variants {
             variants.insert(
               v.name.clone(),
               EnumVariantDef {
                 arity: v.value_types.len(),
+                field_names: v.field_names.clone(),
               },
             );
           }
@@ -536,13 +1420,19 @@ impl EvalContext {
             variants,
           });
           module_ctx.enums.insert(e.name.clone(), def.clone());
-          // Also register on the caller so match arms in imported fns resolve
-          self.enums.insert(e.name.clone(), def.clone());
-          module
-            .values
-            .insert(e.name.clone(), Value::EnumType(def));
+          if exported {
+            self.enums.insert(e.name.clone(), def.clone());
+            module
+              .values
+              .insert(e.name.clone(), Value::EnumType(def));
+          }
         }
-        Item::ImplDecl { type_name, methods } => {
+        Item::ImplDecl {
+          type_name,
+          trait_name,
+          methods,
+          ..
+        } => {
           let entry = module_ctx
             .methods
             .entry(type_name.clone())
@@ -550,48 +1440,166 @@ impl EvalContext {
           for m in methods {
             entry.insert(m.name.clone(), m.clone());
           }
-          let parent_entry = self
-            .methods
-            .entry(type_name.clone())
-            .or_insert_with(HashMap::new);
-          for m in methods {
-            parent_entry.insert(m.name.clone(), m.clone());
+          if let Some(t) = trait_name {
+            module_ctx.record_type_trait(type_name, t);
           }
         }
         _ => {}
       }
     }
 
-    for item in &program {
+    for item in body {
       if let Item::Import(i) = item {
         module_ctx.eval_import(i, span)?;
       }
     }
 
-    for item in &program {
+    module_ctx.apply_inheritance(span)?;
+    for item in body {
+      if !crate::parser::item_is_exported(item, from_mod) {
+        continue;
+      }
+      if let Item::ClassDecl(c) = item {
+        if let Some(def) = module_ctx.structs.get(&c.name).cloned() {
+          module
+            .values
+            .insert(c.name.clone(), Value::StructType(def));
+        }
+        self.import_type_chain(module_ctx, &c.name);
+      }
+    }
+
+    for item in body {
+      let exported = crate::parser::item_is_exported(item, from_mod);
       match item {
         Item::ConstDecl(c) => {
+          if module_ctx.env.get(&c.name).is_some() && module.values.contains_key(&c.name) {
+            return Err(runtime_err(
+              format!(
+                "duplicate export '{}' in module '{}'",
+                c.name, module_name
+              ),
+              span,
+            ));
+          }
           let value = module_ctx.eval_expr(&c.value)?;
-          module.values.insert(c.name.clone(), value);
+          module_ctx.env.define(&c.name, value.clone());
+          if exported {
+            if module.values.contains_key(&c.name) {
+              return Err(runtime_err(
+                format!(
+                  "duplicate export '{}' in module '{}'",
+                  c.name, module_name
+                ),
+                span,
+              ));
+            }
+            module.values.insert(c.name.clone(), value);
+          }
         }
         Item::VarDecl(v) => {
           let value = match &v.value {
             Some(e) => module_ctx.eval_expr(e)?,
             None => Value::None,
           };
-          module.values.insert(v.name.clone(), value);
+          module_ctx.env.define(&v.name, value.clone());
+          if exported {
+            if module.values.contains_key(&v.name) {
+              return Err(runtime_err(
+                format!(
+                  "duplicate export '{}' in module '{}'",
+                  v.name, module_name
+                ),
+                span,
+              ));
+            }
+            module.values.insert(v.name.clone(), value);
+          }
         }
         _ => {}
       }
     }
+    Ok(())
+  }
 
-    let rc = Rc::new(RefCell::new(module));
-    self.loaded_modules.borrow_mut().insert(name.to_string(), rc.clone());
-    Ok(rc)
+  fn bind_match_payload(
+    &mut self,
+    enum_name: &str,
+    variant: &str,
+    binds: &[String],
+    field_binds: &[(String, String)],
+    inner: &Value,
+    span: Span,
+  ) -> Result<(), RuntimeError> {
+    let parts: Vec<Value> = match inner {
+      Value::Array(a) => a.borrow().clone(),
+      other => vec![other.clone()],
+    };
+    if !field_binds.is_empty() {
+      let field_names = self
+        .enums
+        .get(enum_name)
+        .and_then(|e| e.variants.get(variant))
+        .map(|d| d.field_names.clone())
+        .unwrap_or_default();
+      if field_names.iter().all(|n| n.is_empty()) {
+        return Err(runtime_err(
+          format!("{enum_name}.{variant} has no named payload fields"),
+          span,
+        ));
+      }
+      for (field, bind) in field_binds {
+        if bind == "_" {
+          continue;
+        }
+        let Some(i) = field_names.iter().position(|n| n == field) else {
+          return Err(runtime_err(
+            format!("{enum_name}.{variant} has no field '{field}'"),
+            span,
+          ));
+        };
+        let Some(item) = parts.get(i) else {
+          return Err(runtime_err(
+            format!("{enum_name}.{variant} field '{field}' is missing"),
+            span,
+          ));
+        };
+        self.env.define(bind, item.clone());
+      }
+      return Ok(());
+    }
+    match binds.len() {
+      0 => {}
+      1 => {
+        if binds[0] != "_" {
+          self.env.define(&binds[0], inner.clone());
+        }
+      }
+      _ => {
+        for (i, b) in binds.iter().enumerate() {
+          if b == "_" {
+            continue;
+          }
+          if let Some(item) = parts.get(i) {
+            self.env.define(b, item.clone());
+          }
+        }
+      }
+    }
+    Ok(())
+  }
+
+  fn lookup_fn(&self, name: &str) -> Option<FnDecl> {
+    for map in self.module_fns.iter().rev() {
+      if let Some(decl) = map.get(name) {
+        return Some(decl.clone());
+      }
+    }
+    self.functions.get(name).cloned()
   }
 
   fn call_fn(&mut self, name: &str, args: Vec<Value>, span: Span) -> Result<Value, RuntimeError> {
-    let decl = self.functions.get(name).ok_or_else(|| runtime_err(format!("undefined function '{}'", name), span))?.clone();
+    let decl = self.lookup_fn(name).ok_or_else(|| runtime_err(format!("undefined function '{}'", name), span))?;
     self.call_fn_decl(&decl, args, span)
   }
 
@@ -713,6 +1721,7 @@ impl EvalContext {
       StmtKind::Break => Ok(ControlFlow::Break),
       StmtKind::Continue => Ok(ControlFlow::Continue),
       StmtKind::Pass => Ok(ControlFlow::Normal),
+      StmtKind::Comment(_) => Ok(ControlFlow::Normal),
     }
   }
 
@@ -753,7 +1762,7 @@ impl EvalContext {
         Ok(Value::Range(s, e, *inclusive))
       }
       ExprKind::Ident(name) => {
-        if let Some(v) = self.env.get(name) {
+        if let Some(v) = self.lookup_ident(name) {
           return Ok(v);
         }
         if let Some(s) = self.structs.get(name) {
@@ -773,9 +1782,36 @@ impl EvalContext {
             _ => Err(runtime_err(format!("cannot negate {}", value.type_name()), span)),
           },
           UnaryOp::Not => Ok(Value::Bool(!value.truthy())),
+          UnaryOp::BitNot => match value {
+            Value::Int(n) => Ok(Value::Int(!n)),
+            _ => Err(runtime_err(
+              format!("bitwise not requires Int, got {}", value.type_name()),
+              span,
+            )),
+          },
         }
       }
       ExprKind::Binary { op, left, right } => {
+        if matches!(op, BinOp::And | BinOp::Or) {
+          let l = self.eval_expr(left)?;
+          return match op {
+            BinOp::And => {
+              if !l.truthy() {
+                Ok(Value::Bool(false))
+              } else {
+                Ok(Value::Bool(self.eval_expr(right)?.truthy()))
+              }
+            }
+            BinOp::Or => {
+              if l.truthy() {
+                Ok(Value::Bool(true))
+              } else {
+                Ok(Value::Bool(self.eval_expr(right)?.truthy()))
+              }
+            }
+            _ => unreachable!(),
+          };
+        }
         let l = self.eval_expr(left)?;
         let r = self.eval_expr(right)?;
         match op {
@@ -791,21 +1827,32 @@ impl EvalContext {
           BinOp::Mul => numeric_binop(l, r, |a, b| a * b, span),
           BinOp::Div => numeric_binop(l, r, |a, b| a / b, span),
           BinOp::IDiv => match (&l, &r) {
-            (Value::Int(a), Value::Int(b)) => Ok(Value::Int(a / b)),
+            (Value::Int(a), Value::Int(b)) => int_div(*a, *b, span),
             _ => Err(runtime_err(format!("integer division requires Int, got {} and {}", l.type_name(), r.type_name()), span)),
           },
-          BinOp::Mod => numeric_binop(l, r, |a, b| a % b, span),
+          BinOp::Mod => checked_mod(l, r, span),
           BinOp::Eq => Ok(Value::Bool(value_eq(&l, &r))),
           BinOp::Neq => Ok(Value::Bool(!value_eq(&l, &r))),
           BinOp::Lt => compare_op(l, r, |a, b| a < b, span),
           BinOp::Lte => compare_op(l, r, |a, b| a <= b, span),
           BinOp::Gt => compare_op(l, r, |a, b| a > b, span),
           BinOp::Gte => compare_op(l, r, |a, b| a >= b, span),
-          BinOp::And => Ok(Value::Bool(l.truthy() && r.truthy())),
-          BinOp::Or => Ok(Value::Bool(l.truthy() || r.truthy())),
+          BinOp::And | BinOp::Or => unreachable!("short-circuit ops handled above"),
+          BinOp::BitAnd => int_bitwise(l, r, |a, b| a & b, span),
+          BinOp::BitOr => int_bitwise(l, r, |a, b| a | b, span),
+          BinOp::BitXor => int_bitwise(l, r, |a, b| a ^ b, span),
+          BinOp::Shl => int_shift(l, r, true, span),
+          BinOp::Shr => int_shift(l, r, false, span),
         }
       }
       ExprKind::Call { callee, args } => {
+        if let ExprKind::Member { object, name } = &callee.kind {
+          if let ExprKind::Ident(id) = &object.kind {
+            if id == "super" {
+              return self.call_super(name, args, span);
+            }
+          }
+        }
         let arg_values: Result<Vec<_>, _> = args.iter().map(|a| self.eval_expr(a)).collect();
         let arg_values = arg_values?;
         match &callee.kind {
@@ -816,7 +1863,12 @@ impl EvalContext {
             if let ExprKind::Ident(module) = &object.kind {
               let bound_module = matches!(self.env.get(module), Some(Value::Module(_)));
               if !bound_module && self.stdlib.contains_key(module) {
-                return self.call_qualified(module, name, arg_values, span);
+                if crate::stdlib::is_internal_host(module)
+                  || crate::stdlib::is_language_module(module)
+                  || self.imported_host.contains(module)
+                {
+                  return self.call_qualified(module, name, arg_values, span);
+                }
               }
             }
             let obj = self.eval_expr(object)?;
@@ -830,7 +1882,7 @@ impl EvalContext {
         match obj {
           Value::String(s) => {
             match name.as_str() {
-              "len" => Ok(Value::Int(s.len() as i64)),
+              "len" => Ok(Value::Int(string_char_len(&s))),
               _ => Err(runtime_err(format!("String has no member '{}'", name), span)),
             }
           }
@@ -903,9 +1955,10 @@ impl EvalContext {
               Pattern::Variant {
                 name,
                 binds: binding,
+                field_binds,
               },
               Value::Enum {
-                module: _,
+                module: enum_name,
                 variant,
                 value: inner,
               },
@@ -913,28 +1966,14 @@ impl EvalContext {
               if name == variant {
                 self.env.push_scope();
                 if let Some(v) = inner {
-                  match binding.len() {
-                    0 => {}
-                    1 => {
-                      if binding[0] != "_" {
-                        self.env.define(&binding[0], (**v).clone());
-                      }
-                    }
-                    _ => {
-                      if let Value::Array(a) = &**v {
-                        for (i, b) in binding.iter().enumerate() {
-                          if b == "_" {
-                            continue;
-                          }
-                          if let Some(item) = a.borrow().get(i) {
-                            self.env.define(b, item.clone());
-                          }
-                        }
-                      } else if binding[0] != "_" {
-                        self.env.define(&binding[0], (**v).clone());
-                      }
-                    }
-                  }
+                  self.bind_match_payload(
+                    enum_name,
+                    variant,
+                    binding,
+                    field_binds,
+                    v,
+                    span,
+                  )?;
                 }
                 let result = self.exec_block(&arm.body)?;
                 self.env.pop_scope();
@@ -973,13 +2012,26 @@ impl EvalContext {
       ExprKind::StructLiteral { name, fields } => {
         let def = self.structs.get(name).ok_or_else(|| runtime_err(format!("undefined struct '{}'", name), span))?;
         let field_names = def.fields.clone();
+        let defaults = def.defaults.clone();
         let mut values = HashMap::new();
         for (field_name, expr) in fields {
+          if !field_names.iter().any(|n| n == field_name) {
+            return Err(runtime_err(
+              format!("unknown field '{field_name}' on {name}"),
+              span,
+            ));
+          }
           values.insert(field_name.clone(), self.eval_expr(expr)?);
         }
-        // Ensure all declared fields are present (default missing ones to None)
         for field in field_names {
-          values.entry(field).or_insert(Value::None);
+          if values.contains_key(&field) {
+            continue;
+          }
+          if let Some((_, expr)) = defaults.iter().find(|(n, _)| n == &field) {
+            values.insert(field, self.eval_expr(expr)?);
+          } else {
+            values.insert(field, Value::None);
+          }
         }
         Ok(Value::Struct { name: name.clone(), fields: Rc::new(RefCell::new(values)) })
       }
@@ -987,10 +2039,21 @@ impl EvalContext {
         let value = self.eval_expr(right)?;
         match &left.kind {
           ExprKind::Ident(name) => {
-            let new_value = if *op == AssignOp::Assign { value.clone() } else {
-              let old = self.env.get(name).ok_or_else(|| runtime_err(format!("undefined variable '{}'", name), span))?;
+            let old = || self.lookup_ident(name);
+            let new_value = if *op == AssignOp::Assign {
+              value.clone()
+            } else {
+              let old = old().ok_or_else(|| {
+                runtime_err(format!("undefined variable '{}'", name), span)
+              })?;
               apply_assign_op(old, &value, op, span)?
             };
+            if self.env.set_local(name, new_value.clone()) {
+              return Ok(value);
+            }
+            if self.set_field_on_self(name, new_value.clone()) {
+              return Ok(value);
+            }
             self.env.set(name, new_value, span)?;
             Ok(value)
           }
@@ -1019,6 +2082,29 @@ impl EvalContext {
               _ => Err(runtime_err(format!("cannot assign to {}", obj.type_name()), span)),
             }
           }
+          ExprKind::Member { object, name } => {
+            let obj = self.eval_expr(object)?;
+            match obj {
+              Value::Struct { fields, .. } => {
+                let new_value = if *op == AssignOp::Assign {
+                  value.clone()
+                } else {
+                  let old = fields
+                    .borrow()
+                    .get(name)
+                    .cloned()
+                    .unwrap_or(Value::None);
+                  apply_assign_op(old, &value, op, span)?
+                };
+                fields.borrow_mut().insert(name.clone(), new_value);
+                Ok(value)
+              }
+              _ => Err(runtime_err(
+                format!("cannot assign field on {}", obj.type_name()),
+                span,
+              )),
+            }
+          }
           _ => Err(runtime_err("invalid assignment target".to_string(), span)),
         }
       }
@@ -1041,7 +2127,7 @@ impl EvalContext {
           return Err(runtime_err("len takes 1 argument".to_string(), span));
         }
         match &args[0] {
-          Value::String(s) => Ok(Value::Int(s.len() as i64)),
+          Value::String(s) => Ok(Value::Int(string_char_len(s))),
           Value::Array(a) => Ok(Value::Int(a.borrow().len() as i64)),
           Value::Map(m) => Ok(Value::Int(m.borrow().len() as i64)),
           _ => Err(runtime_err(format!("len expects String, Array, or Map, got {}", args[0].type_name()), span)),
@@ -1075,8 +2161,20 @@ impl EvalContext {
         Ok(Value::Map(Rc::new(RefCell::new(map))))
       }
       _ => {
-        if self.functions.contains_key(name) {
+        if self.lookup_fn(name).is_some() {
           self.call_fn(name, args, span)
+        } else if let Some(object) = self.env.get("self") {
+          let type_name = match &object {
+            Value::Struct { name: n, .. } => Some(n.clone()),
+            Value::Enum { module, .. } => Some(module.clone()),
+            _ => None,
+          };
+          if let Some(ty) = type_name {
+            if let Some(v) = self.call_type_method(&ty, &object, name, args, span)? {
+              return Ok(v);
+            }
+          }
+          Err(runtime_err(format!("undefined function '{}'", name), span))
         } else {
           Err(runtime_err(format!("undefined function '{}'", name), span))
         }
@@ -1085,6 +2183,32 @@ impl EvalContext {
   }
 
   fn call_member(&mut self, object: &Value, name: &str, _args: Vec<Value>, span: Span) -> Result<Value, RuntimeError> {
+    if let Value::Signal { name: signal, arity } = object {
+      if name != "emit" {
+        return Err(runtime_err(
+          format!("signal '{signal}' has no method '{name}'"),
+          span,
+        ));
+      }
+      if _args.len() != *arity {
+        return Err(runtime_err(
+          format!(
+            "signal '{signal}' expected {arity} args, got {}",
+            _args.len()
+          ),
+          span,
+        ));
+      }
+      let args = _args.iter().map(value_to_json).collect();
+      self.effects.push(HostEffect::Emit {
+        signal: signal.clone(),
+        args,
+      });
+      return Ok(Value::Void);
+    }
+    if name == "emit" {
+      return Err(runtime_err("unknown signal".to_string(), span));
+    }
     // User-defined methods on structs/enums (impl blocks)
     let type_key = match object {
       Value::Struct { name: n, .. } => Some(n.clone()),
@@ -1092,24 +2216,56 @@ impl EvalContext {
       _ => None,
     };
     if let Some(type_name) = type_key {
-      if let Some(type_methods) = self.methods.get(&type_name) {
-        if let Some(decl) = type_methods.get(name) {
-          let decl = decl.clone();
-          let mut args = _args;
-          if decl.params.first().map(|p| p.name == "self").unwrap_or(false) {
-            args.insert(0, object.clone());
-          }
-          return self.call_fn_decl(&decl, args, span);
-        }
+      if let Some(v) = self.call_type_method(&type_name, object, name, _args.clone(), span)? {
+        return Ok(v);
       }
     }
 
-    // Method dispatch: String, Array, Map
+    self.dispatch_value_method(object, name, _args, span)
+  }
+
+  fn ufcs_or_err(
+    &mut self,
+    object: &Value,
+    name: &str,
+    args: Vec<Value>,
+    span: Span,
+    err: String,
+  ) -> Result<Value, RuntimeError> {
+    if let Some(decl) = self.lookup_fn(name) {
+      if decl.is_ufcs {
+        let mut args = args;
+        args.insert(0, object.clone());
+        return self.call_fn_decl(&decl, args, span);
+      }
+    }
+    Err(runtime_err(err, span))
+  }
+
+  fn dispatch_value_method(
+    &mut self,
+    object: &Value,
+    name: &str,
+    _args: Vec<Value>,
+    span: Span,
+  ) -> Result<Value, RuntimeError> {
     match object {
       Value::String(s) => match name {
-        "len" => Ok(Value::Int(s.len() as i64)),
-        "push" | "pop" => Err(runtime_err(format!("String has no method '{}'", name), span)),
-        _ => Err(runtime_err(format!("String has no method '{}'", name), span)),
+        "len" => Ok(Value::Int(string_char_len(s))),
+        "push" | "pop" => self.ufcs_or_err(
+          object,
+          name,
+          _args,
+          span,
+          format!("String has no method '{name}'"),
+        ),
+        _ => self.ufcs_or_err(
+          object,
+          name,
+          _args,
+          span,
+          format!("String has no method '{name}'"),
+        ),
       },
       Value::Array(a) => match name {
         "len" => Ok(Value::Int(a.borrow().len() as i64)),
@@ -1140,7 +2296,13 @@ impl EvalContext {
           let found = a.borrow().iter().any(|v| value_eq(v, &_args[0]));
           Ok(Value::Bool(found))
         }
-        _ => Err(runtime_err(format!("Array has no method '{}'", name), span)),
+        _ => self.ufcs_or_err(
+          object,
+          name,
+          _args,
+          span,
+          format!("Array has no method '{name}'"),
+        ),
       },
       Value::Map(m) => match name {
         "len" => Ok(Value::Int(m.borrow().len() as i64)),
@@ -1185,7 +2347,13 @@ impl EvalContext {
           m.borrow_mut().insert(key, _args[1].clone());
           Ok(Value::Void)
         }
-        _ => Err(runtime_err(format!("Map has no method '{}'", name), span)),
+        _ => self.ufcs_or_err(
+          object,
+          name,
+          _args,
+          span,
+          format!("Map has no method '{name}'"),
+        ),
       },
       Value::Enum { module, variant, value } => match name {
         "is_some" => Ok(Value::Bool(*module == "Option" && *variant == "Some")),
@@ -1197,7 +2365,13 @@ impl EvalContext {
           if _args.len() != 1 { return Err(runtime_err("unwrap_or takes 1 argument".to_string(), span)); }
           match value { Some(v) => Ok((**v).clone()), None => Ok(_args[0].clone()) }
         }
-        _ => Err(runtime_err(format!("Enum {} has no method '{}'", module, variant), span)),
+        _ => self.ufcs_or_err(
+          object,
+          name,
+          _args,
+          span,
+          format!("Enum {module} has no method '{name}'"),
+        ),
       },
       Value::EnumType(e) => {
         if let Some(v) = e.variants.get(name) {
@@ -1218,7 +2392,11 @@ impl EvalContext {
           m.functions.get(name).cloned()
         };
         if let Some(decl) = decl {
-          return self.call_fn_decl(&decl, _args, span);
+          let fns = m.borrow().functions.clone();
+          self.module_fns.push(fns);
+          let result = self.call_fn_decl(&decl, _args, span);
+          self.module_fns.pop();
+          return result;
         }
         if _args.is_empty() {
           if let Some(value) = m.borrow().values.get(name) {
@@ -1226,17 +2404,27 @@ impl EvalContext {
           }
         }
         Err(runtime_err(format!("module has no member '{}'", name), span))
-      }
-      Value::Struct { name: struct_name, .. } => {
-        Err(runtime_err(format!("struct {} has no method '{}'", struct_name, name), span))
-      }
-      _ => Err(runtime_err(format!("type {} has no method '{}'", object.type_name(), name), span)),
+      },
+      Value::Struct { name: struct_name, .. } => self.ufcs_or_err(
+        object,
+        name,
+        _args,
+        span,
+        format!("struct {struct_name} has no method '{name}'"),
+      ),
+      _ => self.ufcs_or_err(
+        object,
+        name,
+        _args,
+        span,
+        format!("type {} has no method '{name}'", object.type_name()),
+      ),
     }
   }
 
   pub fn call_qualified(&mut self, module: &str, name: &str, args: Vec<Value>, span: Span) -> Result<Value, RuntimeError> {
     match (module, name) {
-      ("str", "contains") => {
+      ("__str", "contains") => {
         if args.len() != 2 {
           return Err(runtime_err("str.contains takes 2 arguments".to_string(), span));
         }
@@ -1244,100 +2432,118 @@ impl EvalContext {
         let sub = match &args[1] { Value::String(s) => s.clone(), _ => return Err(runtime_err("str.contains second arg must be String".to_string(), span)) };
         Ok(Value::Bool(s.contains(&sub)))
       }
-      ("str", "starts_with") => {
+      ("__str", "starts_with") => {
         if args.len() != 2 { return Err(runtime_err("str.starts_with takes 2 arguments".to_string(), span)); }
         let s = match &args[0] { Value::String(s) => s.clone(), _ => return Err(runtime_err("expected String".to_string(), span)) };
         let sub = match &args[1] { Value::String(s) => s.clone(), _ => return Err(runtime_err("expected String".to_string(), span)) };
         Ok(Value::Bool(s.starts_with(&sub)))
       }
-      ("str", "ends_with") => {
+      ("__str", "ends_with") => {
         if args.len() != 2 { return Err(runtime_err("str.ends_with takes 2 arguments".to_string(), span)); }
         let s = match &args[0] { Value::String(s) => s.clone(), _ => return Err(runtime_err("expected String".to_string(), span)) };
         let sub = match &args[1] { Value::String(s) => s.clone(), _ => return Err(runtime_err("expected String".to_string(), span)) };
         Ok(Value::Bool(s.ends_with(&sub)))
       }
-      ("str", "length") => {
+      ("__str", "length") => {
         if args.len() != 1 { return Err(runtime_err("str.length takes 1 argument".to_string(), span)); }
         let s = match &args[0] { Value::String(s) => s.clone(), _ => return Err(runtime_err("expected String".to_string(), span)) };
-        Ok(Value::Int(s.len() as i64))
+        Ok(Value::Int(string_char_len(&s)))
       }
-      ("str", "is_empty") => {
+      ("__str", "is_empty") => {
         if args.len() != 1 { return Err(runtime_err("str.is_empty takes 1 argument".to_string(), span)); }
         let s = match &args[0] { Value::String(s) => s.clone(), _ => return Err(runtime_err("expected String".to_string(), span)) };
         Ok(Value::Bool(s.is_empty()))
       }
-      ("str", "repeat") => {
+      ("__str", "repeat") => {
         if args.len() != 2 { return Err(runtime_err("str.repeat takes 2 arguments".to_string(), span)); }
         let s = match &args[0] { Value::String(s) => s.clone(), _ => return Err(runtime_err("expected String".to_string(), span)) };
         let n = match &args[1] { Value::Int(n) => *n, _ => return Err(runtime_err("expected Int".to_string(), span)) };
         Ok(Value::String(s.repeat(n.max(0) as usize)))
       }
-      ("str", "upper") => {
+      ("__str", "upper") => {
         if args.len() != 1 { return Err(runtime_err("str.upper takes 1 argument".to_string(), span)); }
         let s = match &args[0] { Value::String(s) => s.clone(), _ => return Err(runtime_err("expected String".to_string(), span)) };
         Ok(Value::String(s.to_uppercase()))
       }
-      ("str", "lower") => {
+      ("__str", "lower") => {
         if args.len() != 1 { return Err(runtime_err("str.lower takes 1 argument".to_string(), span)); }
         let s = match &args[0] { Value::String(s) => s.clone(), _ => return Err(runtime_err("expected String".to_string(), span)) };
         Ok(Value::String(s.to_lowercase()))
       }
-      ("str", "trim") => {
+      ("__str", "trim") => {
         if args.len() != 1 { return Err(runtime_err("str.trim takes 1 argument".to_string(), span)); }
         let s = match &args[0] { Value::String(s) => s.clone(), _ => return Err(runtime_err("expected String".to_string(), span)) };
         Ok(Value::String(s.trim().to_string()))
       }
+      ("__str", "split") => {
+        if args.len() != 2 {
+          return Err(runtime_err("str.split takes 2 arguments".to_string(), span));
+        }
+        let s = match &args[0] {
+          Value::String(s) => s.clone(),
+          _ => return Err(runtime_err("expected String".to_string(), span)),
+        };
+        let sep = match &args[1] {
+          Value::String(s) => s.clone(),
+          _ => return Err(runtime_err("expected String".to_string(), span)),
+        };
+        let parts: Vec<Value> = if sep.is_empty() {
+          vec![Value::String(s)]
+        } else {
+          s.split(&sep).map(|p| Value::String(p.to_string())).collect()
+        };
+        Ok(Value::Array(Rc::new(RefCell::new(parts))))
+      }
+      ("__str", "slice") => {
+        if args.len() != 3 {
+          return Err(runtime_err("str.slice takes 3 arguments".to_string(), span));
+        }
+        let s = match &args[0] {
+          Value::String(s) => s.clone(),
+          _ => return Err(runtime_err("expected String".to_string(), span)),
+        };
+        let start = match &args[1] {
+          Value::Int(n) => *n,
+          _ => return Err(runtime_err("str.slice start must be Int".to_string(), span)),
+        };
+        let end = match &args[2] {
+          Value::Int(n) => *n,
+          _ => return Err(runtime_err("str.slice end must be Int".to_string(), span)),
+        };
+        let chars: Vec<char> = s.chars().collect();
+        let len = chars.len() as i64;
+        let start = start.clamp(0, len) as usize;
+        let end = end.clamp(0, len) as usize;
+        let end = end.max(start);
+        Ok(Value::String(chars[start..end].iter().collect()))
+      }
       ("io", "read_text") => {
         if args.len() != 1 { return Err(runtime_err("io.read_text takes 1 argument".to_string(), span)); }
         let path = match &args[0] { Value::String(s) => s.clone(), _ => return Err(runtime_err("io.read_text expects String path".to_string(), span)) };
-        #[cfg(target_arch = "wasm32")]
-        {
-          let _ = path;
-          Ok(Value::Enum {
+        match io_read_text(&path) {
+          Ok(content) => Ok(Value::String(content)),
+          Err(e) => Ok(Value::Enum {
             module: "Result".to_string(),
             variant: "Err".to_string(),
-            value: Some(Box::new(Value::String("io.read_text is unavailable in WASM".into()))),
-          })
-        }
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-          match std::fs::read_to_string(&path) {
-            Ok(content) => Ok(Value::String(content)),
-            Err(e) => Ok(Value::Enum {
-              module: "Result".to_string(),
-              variant: "Err".to_string(),
-              value: Some(Box::new(Value::String(e.to_string()))),
-            }),
-          }
+            value: Some(Box::new(Value::String(e))),
+          }),
         }
       }
       ("io", "write_text") => {
         if args.len() != 2 { return Err(runtime_err("io.write_text takes 2 arguments".to_string(), span)); }
         let path = match &args[0] { Value::String(s) => s.clone(), _ => return Err(runtime_err("io.write_text expects String path".to_string(), span)) };
         let content = match &args[1] { Value::String(s) => s.clone(), _ => return Err(runtime_err("io.write_text expects String content".to_string(), span)) };
-        #[cfg(target_arch = "wasm32")]
-        {
-          let _ = (path, content);
-          Ok(Value::Enum {
+        match io_write_text(&path, &content) {
+          Ok(()) => Ok(Value::Enum {
+            module: "Result".to_string(),
+            variant: "Ok".to_string(),
+            value: Some(Box::new(Value::Void)),
+          }),
+          Err(e) => Ok(Value::Enum {
             module: "Result".to_string(),
             variant: "Err".to_string(),
-            value: Some(Box::new(Value::String("io.write_text is unavailable in WASM".into()))),
-          })
-        }
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-          match std::fs::write(&path, content) {
-            Ok(()) => Ok(Value::Enum {
-              module: "Result".to_string(),
-              variant: "Ok".to_string(),
-              value: Some(Box::new(Value::Void)),
-            }),
-            Err(e) => Ok(Value::Enum {
-              module: "Result".to_string(),
-              variant: "Err".to_string(),
-              value: Some(Box::new(Value::String(e.to_string()))),
-            }),
-          }
+            value: Some(Box::new(Value::String(e))),
+          }),
         }
       }
       ("io", "exists") => {
@@ -1348,15 +2554,7 @@ impl EvalContext {
           Value::String(s) => s.clone(),
           _ => return Err(runtime_err("io.exists expects String path".to_string(), span)),
         };
-        #[cfg(target_arch = "wasm32")]
-        {
-          let _ = path;
-          Ok(Value::Bool(false))
-        }
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-          Ok(Value::Bool(std::path::Path::new(&path).exists()))
-        }
+        Ok(Value::Bool(io_exists(&path)))
       }
       ("Array", "first") => {
         if args.len() != 1 { return Err(runtime_err("Array.first takes 1 argument".to_string(), span)); }
@@ -1379,70 +2577,8 @@ impl EvalContext {
           _ => Err(runtime_err("Array.contains expects Array".to_string(), span)),
         }
       }
-      ("math", "abs") => {
-        if args.len() != 1 { return Err(runtime_err("math.abs takes 1 argument".to_string(), span)); }
-        match &args[0] {
-          Value::Int(n) => Ok(Value::Int(n.abs())),
-          Value::Float(n) => Ok(Value::Float(n.abs())),
-          _ => Err(runtime_err("math.abs expects Int or Float".to_string(), span)),
-        }
-      }
-      ("math", "abs_float") => {
-        if args.len() != 1 { return Err(runtime_err("math.abs_float takes 1 argument".to_string(), span)); }
-        match &args[0] { Value::Float(n) => Ok(Value::Float(n.abs())), _ => Err(runtime_err("math.abs_float expects Float".to_string(), span)) }
-      }
-      ("math", "sign") => {
-        if args.len() != 1 { return Err(runtime_err("math.sign takes 1 argument".to_string(), span)); }
-        match &args[0] {
-          Value::Int(n) => Ok(Value::Int(if *n > 0 { 1 } else if *n < 0 { -1 } else { 0 })),
-          Value::Float(n) => Ok(Value::Int(if *n > 0.0 { 1 } else if *n < 0.0 { -1 } else { 0 })),
-          _ => Err(runtime_err("math.sign expects Int or Float".to_string(), span)),
-        }
-      }
-      ("math", "min") => {
-        if args.len() != 2 { return Err(runtime_err("math.min takes 2 arguments".to_string(), span)); }
-        match (&args[0], &args[1]) {
-          (Value::Int(a), Value::Int(b)) => Ok(Value::Int(*a.min(b))),
-          (Value::Float(a), Value::Float(b)) => Ok(Value::Float(a.min(*b))),
-          (Value::Int(a), Value::Float(b)) => Ok(Value::Float((*a as f64).min(*b))),
-          (Value::Float(a), Value::Int(b)) => Ok(Value::Float(a.min(*b as f64))),
-          _ => Err(runtime_err("math.min expects Int or Float".to_string(), span)),
-        }
-      }
-      ("math", "max") => {
-        if args.len() != 2 { return Err(runtime_err("math.max takes 2 arguments".to_string(), span)); }
-        match (&args[0], &args[1]) {
-          (Value::Int(a), Value::Int(b)) => Ok(Value::Int(*a.max(b))),
-          (Value::Float(a), Value::Float(b)) => Ok(Value::Float(a.max(*b))),
-          (Value::Int(a), Value::Float(b)) => Ok(Value::Float((*a as f64).max(*b))),
-          (Value::Float(a), Value::Int(b)) => Ok(Value::Float(a.max(*b as f64))),
-          _ => Err(runtime_err("math.max expects Int or Float".to_string(), span)),
-        }
-      }
-      ("math", "min_float") => {
-        if args.len() != 2 { return Err(runtime_err("math.min_float takes 2 arguments".to_string(), span)); }
-        match (&args[0], &args[1]) { (Value::Float(a), Value::Float(b)) => Ok(Value::Float(a.min(*b))), _ => Err(runtime_err("math.min_float expects Float".to_string(), span)) }
-      }
-      ("math", "max_float") => {
-        if args.len() != 2 { return Err(runtime_err("math.max_float takes 2 arguments".to_string(), span)); }
-        match (&args[0], &args[1]) { (Value::Float(a), Value::Float(b)) => Ok(Value::Float(a.max(*b))), _ => Err(runtime_err("math.max_float expects Float".to_string(), span)) }
-      }
-      ("math", "clamp") => {
-        if args.len() != 3 { return Err(runtime_err("math.clamp takes 3 arguments".to_string(), span)); }
-        match (&args[0], &args[1], &args[2]) {
-          (Value::Int(v), Value::Int(lo), Value::Int(hi)) => Ok(Value::Int(*v.max(lo).min(hi))),
-          (Value::Float(v), Value::Float(lo), Value::Float(hi)) => Ok(Value::Float((*v).max(*lo).min(*hi))),
-          (Value::Int(v), Value::Float(lo), Value::Float(hi)) => Ok(Value::Float((*v as f64).max(*lo).min(*hi))),
-          (Value::Float(v), Value::Int(lo), Value::Int(hi)) => Ok(Value::Float((*v).max(*lo as f64).min(*hi as f64))),
-          _ => Err(runtime_err("math.clamp expects consistent Int or Float arguments".to_string(), span)),
-        }
-      }
-      ("math", "clamp_float") => {
-        if args.len() != 3 { return Err(runtime_err("math.clamp_float takes 3 arguments".to_string(), span)); }
-        match (&args[0], &args[1], &args[2]) { (Value::Float(v), Value::Float(lo), Value::Float(hi)) => Ok(Value::Float((*v).max(*lo).min(*hi))), _ => Err(runtime_err("math.clamp_float expects Float".to_string(), span)) }
-      }
-      ("math", "pow") => {
-        if args.len() != 2 { return Err(runtime_err("math.pow takes 2 arguments".to_string(), span)); }
+      ("__math", "pow") => {
+        if args.len() != 2 { return Err(runtime_err("__math.pow takes 2 arguments".to_string(), span)); }
         match (&args[0], &args[1]) {
           (Value::Int(base), Value::Int(exp)) => {
             if *exp < 0 { Ok(Value::Int(0)) } else { Ok(Value::Int(base.pow(*exp as u32))) }
@@ -1452,90 +2588,203 @@ impl EvalContext {
           }
           (Value::Float(base), Value::Float(exp)) => Ok(Value::Float(base.powf(*exp))),
           (Value::Int(base), Value::Float(exp)) => Ok(Value::Float((*base as f64).powf(*exp))),
-          _ => Err(runtime_err("math.pow expects numeric arguments".to_string(), span)),
+          _ => Err(runtime_err("__math.pow expects numeric arguments".to_string(), span)),
         }
       }
-      ("math", "gcd") => {
-        if args.len() != 2 { return Err(runtime_err("math.gcd takes 2 arguments".to_string(), span)); }
-        match (&args[0], &args[1]) {
-          (Value::Int(a), Value::Int(b)) => {
-            let mut x = a.abs();
-            let mut y = b.abs();
-            while y != 0 {
-              let t = y;
-              y = x % y;
-              x = t;
-            }
-            Ok(Value::Int(x))
+      ("__math", "to_int") => {
+        if args.len() != 1 { return Err(runtime_err("__math.to_int takes 1 argument".to_string(), span)); }
+        match &args[0] { Value::Float(n) => Ok(Value::Int(*n as i64)), Value::Int(n) => Ok(Value::Int(*n)), _ => Err(runtime_err("__math.to_int expects Float or Int".to_string(), span)) }
+      }
+      ("__math", "to_float") => {
+        if args.len() != 1 { return Err(runtime_err("__math.to_float takes 1 argument".to_string(), span)); }
+        match &args[0] { Value::Int(n) => Ok(Value::Float(*n as f64)), Value::Float(n) => Ok(Value::Float(*n)), _ => Err(runtime_err("__math.to_float expects Float or Int".to_string(), span)) }
+      }
+      ("__math", "sqrt") => {
+        if args.len() != 1 { return Err(runtime_err("__math.sqrt takes 1 argument".to_string(), span)); }
+        match as_f64(&args[0]) {
+          Some(n) => Ok(Value::Float(n.sqrt())),
+          None => Err(runtime_err("__math.sqrt expects Int or Float".to_string(), span)),
+        }
+      }
+      ("__math", "sin") => {
+        if args.len() != 1 { return Err(runtime_err("__math.sin takes 1 argument".to_string(), span)); }
+        match as_f64(&args[0]) {
+          Some(n) => Ok(Value::Float(n.sin())),
+          None => Err(runtime_err("__math.sin expects Int or Float".to_string(), span)),
+        }
+      }
+      ("__math", "cos") => {
+        if args.len() != 1 { return Err(runtime_err("__math.cos takes 1 argument".to_string(), span)); }
+        match as_f64(&args[0]) {
+          Some(n) => Ok(Value::Float(n.cos())),
+          None => Err(runtime_err("__math.cos expects Int or Float".to_string(), span)),
+        }
+      }
+      ("__math", "atan2") => {
+        if args.len() != 2 { return Err(runtime_err("__math.atan2 takes 2 arguments".to_string(), span)); }
+        match (as_f64(&args[0]), as_f64(&args[1])) {
+          (Some(y), Some(x)) => Ok(Value::Float(y.atan2(x))),
+          _ => Err(runtime_err("__math.atan2 expects Int or Float".to_string(), span)),
+        }
+      }
+      ("input", "pressed") => {
+        if args.len() != 1 {
+          return Err(runtime_err("input.pressed takes 1 argument".to_string(), span));
+        }
+        let code = match &args[0] {
+          Value::String(s) => s.as_str(),
+          _ => {
+            return Err(runtime_err(
+              "input.pressed expects a String key code".to_string(),
+              span,
+            ));
           }
-          _ => Err(runtime_err("math.gcd expects Int arguments".to_string(), span)),
+        };
+        Ok(Value::Bool(csv_has(&self.pressed, code)))
+      }
+      ("input", "held") => {
+        if args.len() != 1 {
+          return Err(runtime_err("input.held takes 1 argument".to_string(), span));
         }
+        let code = match &args[0] {
+          Value::String(s) => s.as_str(),
+          _ => {
+            return Err(runtime_err(
+              "input.held expects a String key code".to_string(),
+              span,
+            ));
+          }
+        };
+        Ok(Value::Bool(csv_has(&self.keys, code)))
       }
-      ("math", "to_int") => {
-        if args.len() != 1 { return Err(runtime_err("math.to_int takes 1 argument".to_string(), span)); }
-        match &args[0] { Value::Float(n) => Ok(Value::Int(*n as i64)), Value::Int(n) => Ok(Value::Int(*n)), _ => Err(runtime_err("math.to_int expects Float or Int".to_string(), span)) }
-      }
-      ("math", "to_float") => {
-        if args.len() != 1 { return Err(runtime_err("math.to_float takes 1 argument".to_string(), span)); }
-        match &args[0] { Value::Int(n) => Ok(Value::Float(*n as f64)), Value::Float(n) => Ok(Value::Float(*n)), _ => Err(runtime_err("math.to_float expects Float or Int".to_string(), span)) }
-      }
-      ("checks", "that") | ("checks", "truthy") => {
-        if args.len() != 1 { return Err(runtime_err("checks.that takes 1 argument".to_string(), span)); }
-        if !args[0].truthy() { return Err(runtime_err("checks.that failed".to_string(), span)); }
+      ("strata", "move") => {
+        if args.len() != 2 {
+          return Err(runtime_err("strata.move takes 2 arguments".to_string(), span));
+        }
+        let dx = as_f64(&args[0]).ok_or_else(|| runtime_err("strata.move expects numbers".to_string(), span))?;
+        let dy = as_f64(&args[1]).ok_or_else(|| runtime_err("strata.move expects numbers".to_string(), span))?;
+        self.effects.push(HostEffect::Move { dx, dy });
         Ok(Value::Void)
       }
-      ("checks", "falsey") => {
-        if args.len() != 1 { return Err(runtime_err("checks.falsey takes 1 argument".to_string(), span)); }
-        if args[0].truthy() { return Err(runtime_err("checks.falsey failed".to_string(), span)); }
+      ("strata", "rot") => {
+        if args.len() != 1 {
+          return Err(runtime_err("strata.rot takes 1 argument".to_string(), span));
+        }
+        let degrees = as_f64(&args[0]).ok_or_else(|| runtime_err("strata.rot expects a number".to_string(), span))?;
+        self.effects.push(HostEffect::Rot { degrees });
         Ok(Value::Void)
       }
-      ("checks", "eq") => {
-        if args.len() != 2 { return Err(runtime_err("checks.eq takes 2 arguments".to_string(), span)); }
-        if !value_eq(&args[0], &args[1]) { return Err(runtime_err(format!("checks.eq failed: {} != {}", args[0].to_string(), args[1].to_string()), span)); }
+      ("strata", "set") => {
+        if args.len() != 2 {
+          return Err(runtime_err("strata.set takes 2 arguments".to_string(), span));
+        }
+        let x = as_f64(&args[0]).ok_or_else(|| runtime_err("strata.set expects numbers".to_string(), span))?;
+        let y = as_f64(&args[1]).ok_or_else(|| runtime_err("strata.set expects numbers".to_string(), span))?;
+        self.effects.push(HostEffect::Set {
+          x: Some(x),
+          y: Some(y),
+          rot: None,
+        });
         Ok(Value::Void)
       }
-      ("checks", "neq") => {
-        if args.len() != 2 { return Err(runtime_err("checks.neq takes 2 arguments".to_string(), span)); }
-        if value_eq(&args[0], &args[1]) { return Err(runtime_err(format!("checks.neq failed: {} == {}", args[0].to_string(), args[1].to_string()), span)); }
+      ("strata", "play_sound") => {
+        if args.len() != 1 {
+          return Err(runtime_err("strata.play_sound takes 1 argument".to_string(), span));
+        }
+        let name = match &args[0] {
+          Value::String(s) => s.clone(),
+          _ => return Err(runtime_err("strata.play_sound expects a String".to_string(), span)),
+        };
+        self.effects.push(HostEffect::PlaySound { name: Some(name) });
         Ok(Value::Void)
       }
-      ("checks", "eq_bool") => {
-        if args.len() != 2 { return Err(runtime_err("checks.eq_bool takes 2 arguments".to_string(), span)); }
-        match (&args[0], &args[1]) {
-          (Value::Bool(a), Value::Bool(b)) if a == b => Ok(Value::Void),
-          _ => Err(runtime_err(format!("checks.eq_bool failed: {} != {}", args[0].to_string(), args[1].to_string()), span)),
+      ("strata", "destroy") => {
+        if args.len() > 1 {
+          return Err(runtime_err(
+            "strata.destroy takes 0 or 1 arguments".to_string(),
+            span,
+          ));
+        }
+        let name = match args.first() {
+          None => None,
+          Some(Value::String(s)) => Some(s.clone()),
+          Some(_) => {
+            return Err(runtime_err(
+              "strata.destroy expects a String".to_string(),
+              span,
+            ));
+          }
+        };
+        self.effects.push(HostEffect::Destroy { name });
+        Ok(Value::Void)
+      }
+      ("strata", "find") => {
+        if args.len() > 1 {
+          return Err(runtime_err(
+            "strata.find takes 0 or 1 arguments".to_string(),
+            span,
+          ));
+        }
+        match args.first() {
+          None => Ok(self.find_nearest()),
+          Some(Value::String(name)) => Ok(self.find_by_name(name)),
+          Some(_) => Err(runtime_err(
+            "strata.find expects a String name".to_string(),
+            span,
+          )),
         }
       }
-      ("checks", "eq_float") => {
-        if args.len() != 2 { return Err(runtime_err("checks.eq_float takes 2 arguments".to_string(), span)); }
-        match (&args[0], &args[1]) {
-          (Value::Float(a), Value::Float(b)) if (a - b).abs() < f64::EPSILON => Ok(Value::Void),
-          (Value::Int(a), Value::Int(b)) if a == b => Ok(Value::Void),
-          _ => Err(runtime_err(format!("checks.eq_float failed: {} != {}", args[0].to_string(), args[1].to_string()), span)),
+      ("strata", "after") => {
+        if args.len() != 2 {
+          return Err(runtime_err("strata.after takes 2 arguments".to_string(), span));
         }
+        let delay = as_f64(&args[0]).ok_or_else(|| {
+          runtime_err("strata.after expects a number delay".to_string(), span)
+        })?;
+        let method = match &args[1] {
+          Value::String(s) => s.clone(),
+          _ => {
+            return Err(runtime_err(
+              "strata.after expects a String method name".to_string(),
+              span,
+            ));
+          }
+        };
+        self.effects.push(HostEffect::After { delay, method });
+        Ok(Value::Void)
       }
-      ("checks", "eq_string") => {
-        if args.len() != 2 { return Err(runtime_err("checks.eq_string takes 2 arguments".to_string(), span)); }
-        match (&args[0], &args[1]) {
-          (Value::String(a), Value::String(b)) if a == b => Ok(Value::Void),
-          _ => Err(runtime_err(format!("checks.eq_string failed: {} != {}", args[0].to_string(), args[1].to_string()), span)),
+      ("strata", "spawn") => {
+        if args.len() != 1 {
+          return Err(runtime_err("strata.spawn takes 1 argument".to_string(), span));
         }
-      }
-      ("Option" | "option", "Some") => {
-        if args.len() != 1 { return Err(runtime_err("Option.Some takes 1 argument".to_string(), span)); }
-        Ok(Value::Enum { module: "Option".to_string(), variant: "Some".to_string(), value: Some(Box::new(args[0].clone())) })
-      }
-      ("Option" | "option", "None") => {
-        if !args.is_empty() { return Err(runtime_err("Option.None takes 0 arguments".to_string(), span)); }
-        Ok(Value::Enum { module: "Option".to_string(), variant: "None".to_string(), value: None })
-      }
-      ("Result" | "result", "Ok") => {
-        if args.len() != 1 { return Err(runtime_err("Result.Ok takes 1 argument".to_string(), span)); }
-        Ok(Value::Enum { module: "Result".to_string(), variant: "Ok".to_string(), value: Some(Box::new(args[0].clone())) })
-      }
-      ("Result" | "result", "Err") => {
-        if args.len() != 1 { return Err(runtime_err("Result.Err takes 1 argument".to_string(), span)); }
-        Ok(Value::Enum { module: "Result".to_string(), variant: "Err".to_string(), value: Some(Box::new(args[0].clone())) })
+        match &args[0] {
+          Value::String(name) => {
+            self.effects.push(HostEffect::SpawnPrefab {
+              prefab: name.clone(),
+              x: None,
+              y: None,
+            });
+            Ok(Value::Void)
+          }
+          Value::Map(m) => {
+            let map = m.borrow();
+            if let Some(prefab) = map_string(&map, "prefab") {
+              self.effects.push(HostEffect::SpawnPrefab {
+                prefab,
+                x: map_f64(&map, "x"),
+                y: map_f64(&map, "y"),
+              });
+              Ok(Value::Void)
+            } else {
+              self.effects.push(spawn_from_map(&map));
+              Ok(Value::Void)
+            }
+          }
+          _ => Err(runtime_err(
+            "strata.spawn expects a prefab name or a Map".to_string(),
+            span,
+          )),
+        }
       }
       _ => Err(runtime_err(format!("unknown stdlib function {}.{}", module, name), span)),
     }
@@ -1550,10 +2799,61 @@ enum ControlFlow {
   Continue,
 }
 
+fn as_f64(value: &Value) -> Option<f64> {
+  match value {
+    Value::Float(n) => Some(*n),
+    Value::Int(n) => Some(*n as f64),
+    _ => None,
+  }
+}
+
+fn csv_has(csv: &str, code: &str) -> bool {
+  if code.is_empty() {
+    return false;
+  }
+  csv.split(',').any(|token| token.trim() == code)
+}
+
+fn value_to_json(value: &Value) -> serde_json::Value {
+  match value {
+    Value::Int(n) => serde_json::json!(n),
+    Value::Float(n) => serde_json::json!(n),
+    Value::Bool(b) => serde_json::json!(b),
+    Value::String(s) => serde_json::json!(s),
+    _ => serde_json::Value::Null,
+  }
+}
+
+fn map_string(map: &HashMap<String, Value>, key: &str) -> Option<String> {
+  match map.get(key) {
+    Some(Value::String(s)) => Some(s.clone()),
+    _ => None,
+  }
+}
+
+fn map_f64(map: &HashMap<String, Value>, key: &str) -> Option<f64> {
+  map.get(key).and_then(as_f64)
+}
+
+fn spawn_from_map(map: &HashMap<String, Value>) -> HostEffect {
+  HostEffect::Spawn {
+    name: map_string(map, "name").unwrap_or_else(|| "Entity".into()),
+    kind: map_string(map, "kind").unwrap_or_else(|| "sprite".into()),
+    x: map_f64(map, "x").unwrap_or(0.0),
+    y: map_f64(map, "y").unwrap_or(0.0),
+    width: map_f64(map, "w").or_else(|| map_f64(map, "width")).unwrap_or(32.0),
+    height: map_f64(map, "h").or_else(|| map_f64(map, "height")).unwrap_or(32.0),
+    color: map_string(map, "color").unwrap_or_else(|| "#61afef".into()),
+    script: map_string(map, "script"),
+  }
+}
+
 fn value_eq(a: &Value, b: &Value) -> bool {
   match (a, b) {
     (Value::Int(a), Value::Int(b)) => a == b,
     (Value::Float(a), Value::Float(b)) => (a - b).abs() < f64::EPSILON,
+    (Value::Int(a), Value::Float(b)) => (*a as f64 - b).abs() < f64::EPSILON,
+    (Value::Float(a), Value::Int(b)) => (a - *b as f64).abs() < f64::EPSILON,
     (Value::String(a), Value::String(b)) => a == b,
     (Value::Bool(a), Value::Bool(b)) => a == b,
     (Value::None, Value::None) => true,
@@ -1597,6 +2897,79 @@ fn format_value(value: &Value, format: Option<&str>, span: Span) -> Result<Strin
   Ok(value.to_string())
 }
 
+fn int_bitwise<F: FnOnce(i64, i64) -> i64>(
+  l: Value,
+  r: Value,
+  op: F,
+  span: Span,
+) -> Result<Value, RuntimeError> {
+  match (l, r) {
+    (Value::Int(a), Value::Int(b)) => Ok(Value::Int(op(a, b))),
+    (l, r) => Err(runtime_err(
+      format!(
+        "bitwise operators require Int, got {} and {}",
+        l.type_name(),
+        r.type_name()
+      ),
+      span,
+    )),
+  }
+}
+
+fn int_shift(l: Value, r: Value, left: bool, span: Span) -> Result<Value, RuntimeError> {
+  match (l, r) {
+    (Value::Int(a), Value::Int(b)) => {
+      if b < 0 || b >= 64 {
+        return Err(runtime_err(
+          format!("shift count {b} is out of range"),
+          span,
+        ));
+      }
+      let n = if left {
+        a.wrapping_shl(b as u32)
+      } else {
+        a.wrapping_shr(b as u32)
+      };
+      Ok(Value::Int(n))
+    }
+    (l, r) => Err(runtime_err(
+      format!(
+        "shift requires Int, got {} and {}",
+        l.type_name(),
+        r.type_name()
+      ),
+      span,
+    )),
+  }
+}
+
+fn string_char_len(s: &str) -> i64 {
+  s.chars().count() as i64
+}
+
+fn int_div(a: i64, b: i64, span: Span) -> Result<Value, RuntimeError> {
+  if b == 0 {
+    Err(runtime_err("division by zero".to_string(), span))
+  } else {
+    Ok(Value::Int(a / b))
+  }
+}
+
+fn is_numeric_zero(v: &Value) -> bool {
+  match v {
+    Value::Int(0) => true,
+    Value::Float(n) if *n == 0.0 => true,
+    _ => false,
+  }
+}
+
+fn checked_mod(l: Value, r: Value, span: Span) -> Result<Value, RuntimeError> {
+  if is_numeric_zero(&r) {
+    return Err(runtime_err("division by zero".to_string(), span));
+  }
+  numeric_binop(l, r, |a, b| a % b, span)
+}
+
 fn numeric_binop<F: FnOnce(f64, f64) -> f64>(l: Value, r: Value, op: F, span: Span) -> Result<Value, RuntimeError> {
   let a = to_float(&l, span)?;
   let b = to_float(&r, span)?;
@@ -1629,6 +3002,72 @@ fn apply_assign_op(old: Value, new: &Value, op: &AssignOp, span: Span) -> Result
     AssignOp::Sub => numeric_binop(old, new.clone(), |a, b| a - b, span),
     AssignOp::Mul => numeric_binop(old, new.clone(), |a, b| a * b, span),
     AssignOp::Div => numeric_binop(old, new.clone(), |a, b| a / b, span),
-    AssignOp::Mod => numeric_binop(old, new.clone(), |a, b| a % b, span),
+    AssignOp::Mod => checked_mod(old, new.clone(), span),
+    AssignOp::BitAnd => int_bitwise(old, new.clone(), |a, b| a & b, span),
+    AssignOp::BitOr => int_bitwise(old, new.clone(), |a, b| a | b, span),
+    AssignOp::BitXor => int_bitwise(old, new.clone(), |a, b| a ^ b, span),
+  }
+}
+
+#[cfg(target_arch = "wasm32")]
+mod wasm_fs {
+  use std::cell::RefCell;
+  use std::collections::HashMap;
+
+  thread_local! {
+    static FILES: RefCell<HashMap<String, String>> = RefCell::new(HashMap::new());
+  }
+
+  pub fn read(path: &str) -> Result<String, String> {
+    FILES.with(|fs| {
+      fs.borrow()
+        .get(path)
+        .cloned()
+        .ok_or_else(|| format!("file not found: {path}"))
+    })
+  }
+
+  pub fn write(path: &str, content: &str) -> Result<(), String> {
+    FILES.with(|fs| {
+      fs.borrow_mut().insert(path.to_string(), content.to_string());
+      Ok(())
+    })
+  }
+
+  pub fn exists(path: &str) -> bool {
+    FILES.with(|fs| fs.borrow().contains_key(path))
+  }
+}
+
+fn io_read_text(path: &str) -> Result<String, String> {
+  #[cfg(target_arch = "wasm32")]
+  {
+    wasm_fs::read(path)
+  }
+  #[cfg(not(target_arch = "wasm32"))]
+  {
+    std::fs::read_to_string(path).map_err(|e| e.to_string())
+  }
+}
+
+fn io_write_text(path: &str, content: &str) -> Result<(), String> {
+  #[cfg(target_arch = "wasm32")]
+  {
+    wasm_fs::write(path, content)
+  }
+  #[cfg(not(target_arch = "wasm32"))]
+  {
+    std::fs::write(path, content).map_err(|e| e.to_string())
+  }
+}
+
+fn io_exists(path: &str) -> bool {
+  #[cfg(target_arch = "wasm32")]
+  {
+    wasm_fs::exists(path)
+  }
+  #[cfg(not(target_arch = "wasm32"))]
+  {
+    std::path::Path::new(path).exists()
   }
 }

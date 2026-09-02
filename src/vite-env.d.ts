@@ -3,12 +3,18 @@
 interface FileSystemHandle {
   kind: 'file' | 'directory'
   name: string
+  queryPermission?(descriptor?: {
+    mode?: 'read' | 'readwrite'
+  }): Promise<PermissionState>
+  requestPermission?(descriptor?: {
+    mode?: 'read' | 'readwrite'
+  }): Promise<PermissionState>
 }
 
 interface FileSystemFileHandle extends FileSystemHandle {
   kind: 'file'
   getFile(): Promise<File>
-  createWritable(): Promise<{
+  createWritable(options?: { keepExistingData?: boolean }): Promise<{
     write(data: string | BufferSource | Blob): Promise<void>
     close(): Promise<void>
   }>
@@ -28,5 +34,8 @@ interface FileSystemDirectoryHandle extends FileSystemHandle {
 }
 
 interface Window {
-  showDirectoryPicker?: () => Promise<FileSystemDirectoryHandle>
+  showDirectoryPicker?: (options?: {
+    mode?: 'read' | 'readwrite'
+    id?: string
+  }) => Promise<FileSystemDirectoryHandle>
 }

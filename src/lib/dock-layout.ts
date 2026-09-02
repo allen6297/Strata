@@ -19,6 +19,7 @@ export type PanelId =
   | 'viewport'
   | 'assets'
   | 'inspector'
+  | 'log'
 
 export type DockZoneId = 'left' | 'center' | 'right' | 'bottom'
 
@@ -48,8 +49,9 @@ export interface DockLayout {
 export const PANEL_LABELS: Record<PanelId, string> = {
   hierarchy: 'Hierarchy',
   viewport: 'Viewport',
-  assets: 'Assets',
+  assets: 'Files',
   inspector: 'Inspector',
+  log: 'Log',
 }
 
 /** Viewport stays in the center editing column. */
@@ -64,7 +66,7 @@ export const DEFAULT_DOCK_LAYOUT: DockLayout = {
     left: ['hierarchy'],
     center: ['viewport'],
     right: ['inspector'],
-    bottom: ['assets'],
+    bottom: ['assets', 'log'],
   },
   active: {
     left: 'hierarchy',
@@ -84,6 +86,7 @@ export const HIDEABLE_PANELS = new Set<PanelId>([
   'hierarchy',
   'assets',
   'inspector',
+  'log',
 ])
 
 const LIMITS = {
@@ -107,7 +110,7 @@ function isPanelId(id: string): id is PanelId {
 function defaultZoneFor(panelId: PanelId): DockZoneId {
   if (panelId === 'viewport') return 'center'
   if (panelId === 'inspector') return 'right'
-  if (panelId === 'assets') return 'bottom'
+  if (panelId === 'assets' || panelId === 'log') return 'bottom'
   return 'left'
 }
 
@@ -288,7 +291,7 @@ function fromLegacyLayout(v1: EditorLayout): DockLayout {
       left: ['hierarchy'],
       center: ['viewport'],
       right: ['inspector'],
-      bottom: ['assets'],
+      bottom: ['assets', 'log'],
     },
     active: {
       left: 'hierarchy',

@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -5,17 +6,31 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
-use strata_engine::{RoseGoldScriptHost, SceneFile, World, ENGINE_VERSION};
+use strata_engine::{PlayFrame, PlaySession, SceneFile, ENGINE_VERSION};
 use tauri::State;
 
 mod menu;
+use menu::sync_view_menu;
 
 #[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 struct RunResult {
   ok: bool,
   stdout: String,
   stderr: String,
   message: String,
+  effects: Vec<rosegold::HostEffect>,
+  hook_effects: Vec<rosegold::LabeledHostEffects>,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct ProjectEntry {
+  name: String,
+  path: String,
+  scene: Option<String>,
+  /// True when this folder is a child of the chosen projects root.
+  nested: bool,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -30,15 +45,13 @@ struct ProjectFile {
 }
 
 pub struct EngineState {
-  world: Mutex<World>,
-  host: Mutex<RoseGoldScriptHost>,
+  session: Mutex<PlaySession>,
 }
 
 impl Default for EngineState {
   fn default() -> Self {
     Self {
-      world: Mutex::new(World::new()),
-      host: Mutex::new(RoseGoldScriptHost::new()),
+      session: Mutex::new(PlaySession::new()),
     }
   }
 }
@@ -48,34 +61,6 @@ impl Default for EngineState {
 pub struct EngineInfo {
   pub version: String,
   pub script_host: String,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct EngineFrame {
-  scene: SceneFile,
-  stdout: String,
-  side_effects: Vec<EngineSideEffect>,
-  had_error: bool,
-}
-
-#[derive(Serialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-enum EngineSideEffect {
-  PlaySound { name: Option<String> },
-}
-
-fn side_effects_from_host(host: &RoseGoldScriptHost) -> Vec<EngineSideEffect> {
-  host
-    .last_side_effects
-    .iter()
-    .filter_map(|d| match d {
-      strata_engine::StrataDirective::PlaySound { name } => {
-        Some(EngineSideEffect::PlaySound { name: name.clone() })
-      }
-      _ => None,
-    })
-    .collect()
 }
 
 static ROSEGOLD_RUN_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -94,9 +79,81 @@ fn run_rosegold_file(path: &Path) -> Result<RunResult, String> {
     stdout: result.stdout,
     stderr: result.stderr,
     message: result.message,
+    effects: result.effects,
+    hook_effects: Vec::new(),
   })
 }
 
+
+#[tauri::command]
+fn check_rosegold(
+  source: String,
+  file: Option<String>,
+  modules: Option<HashMap<String, String>>,
+) -> Vec<rosegold::Diagnostic> {
+  let file = file.unwrap_or_else(|| "script.rg".into());
+  match modules {
+    Some(m) if !m.is_empty() => rosegold::check_source_with_modules(&source, &file, m),
+    _ => rosegold::check_source(&source, &file),
+  }
+}
+
+#[tauri::command]
+fn def_rosegold(
+  source: String,
+  file: Option<String>,
+  line: u32,
+  col: u32,
+  modules: Option<HashMap<String, String>>,
+) -> Option<rosegold::SymbolInfo> {
+  let file = file.unwrap_or_else(|| "script.rg".into());
+  let modules = modules.unwrap_or_default();
+  rosegold::def_at(&source, &file, line, col, modules)
+}
+
+#[tauri::command]
+fn hover_rosegold(
+  source: String,
+  file: Option<String>,
+  line: u32,
+  col: u32,
+  modules: Option<HashMap<String, String>>,
+) -> Option<rosegold::SymbolInfo> {
+  let file = file.unwrap_or_else(|| "script.rg".into());
+  let modules = modules.unwrap_or_default();
+  rosegold::hover_at(&source, &file, line, col, modules)
+}
+
+#[tauri::command]
+fn list_rosegold_exports(source: String) -> Vec<rosegold::ExportField> {
+  rosegold::list_exports(&source)
+}
+
+#[tauri::command]
+fn list_rosegold_signals(
+  source: String,
+  modules: Option<HashMap<String, String>>,
+) -> Vec<rosegold::SignalField> {
+  match modules {
+    Some(m) if !m.is_empty() => rosegold::list_signals_with_modules(&source, m),
+    _ => rosegold::list_signals(&source),
+  }
+}
+
+#[tauri::command]
+fn list_rosegold_fns(source: String) -> Vec<rosegold::FnMeta> {
+  rosegold::list_fns(&source)
+}
+
+#[tauri::command]
+fn list_rosegold_nodes(source: String) -> Vec<rosegold::NodeClass> {
+  rosegold::list_nodes(&source)
+}
+
+#[tauri::command]
+fn stdlib_rosegold(name: String) -> Option<String> {
+  rosegold::stdlib::file_source(&name).map(|(_, src)| src.to_string())
+}
 
 #[tauri::command]
 fn run_rosegold(source: String) -> Result<RunResult, String> {
@@ -111,6 +168,28 @@ fn run_rosegold(source: String) -> Result<RunResult, String> {
   run_rosegold_file(&path)
 }
 
+#[tauri::command]
+fn run_rosegold_preview(
+  source: String,
+  name: String,
+  x: f64,
+  y: f64,
+  modules: Option<HashMap<String, String>>,
+) -> Result<RunResult, String> {
+  let result = match modules {
+    Some(m) if !m.is_empty() => rosegold::run_preview_with_modules(&source, &name, x, y, m),
+    _ => rosegold::run_preview(&source, &name, x, y),
+  };
+  Ok(RunResult {
+    ok: result.ok,
+    stdout: result.stdout,
+    stderr: result.stderr,
+    message: result.message,
+    effects: result.effects,
+    hook_effects: Vec::new(),
+  })
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct HookJob {
@@ -122,13 +201,18 @@ struct HookJob {
 fn run_rosegold_hooks(jobs: Vec<HookJob>) -> Result<RunResult, String> {
   let mut all_out = String::new();
   let mut all_err = String::new();
+  let mut hook_effects = Vec::new();
   let mut ok = true;
 
   for (i, job) in jobs.iter().enumerate() {
     let dir = unique_rosegold_dir("strata-rosegold-hook")?;
     let path = dir.join(format!("hook_{i}.rg"));
     fs::write(&path, &job.source).map_err(|e| e.to_string())?;
-    let result = run_rosegold_file(&path)?;
+    let mut result = run_rosegold_file(&path)?;
+    hook_effects.push(rosegold::LabeledHostEffects {
+      label: job.label.clone(),
+      effects: std::mem::take(&mut result.effects),
+    });
     all_out.push_str(&format!("--- {} ---\n", job.label));
     if !result.stdout.is_empty() {
       all_out.push_str(&result.stdout);
@@ -156,12 +240,16 @@ fn run_rosegold_hooks(jobs: Vec<HookJob>) -> Result<RunResult, String> {
     } else {
       format!("One or more of {} hook job(s) failed", jobs.len())
     },
+    effects: Vec::new(),
+    hook_effects,
   })
 }
 
 fn classify(name: &str) -> Option<&'static str> {
   let lower = name.to_ascii_lowercase();
-  if lower.ends_with(".rg") {
+  if lower == "strata.json" {
+    None
+  } else if lower.ends_with(".rg") {
     Some("script")
   } else if lower.ends_with(".scene") || lower.ends_with(".json") {
     Some("scene")
@@ -211,6 +299,21 @@ fn walk_project(
     if meta.is_dir() {
       if should_skip_dir(&name) {
         continue;
+      }
+      let relative = full
+        .strip_prefix(root)
+        .unwrap_or(&full)
+        .to_string_lossy()
+        .replace('\\', "/");
+      if !relative.is_empty() {
+        out.push(ProjectFile {
+          name: name.clone(),
+          path: full.to_string_lossy().to_string(),
+          relative_path: relative,
+          kind: "folder".into(),
+          size: 0,
+          content: None,
+        });
       }
       walk_project(root, &full, depth + 1, out)?;
       continue;
@@ -263,12 +366,170 @@ fn list_project_files(path: String) -> Result<Vec<ProjectFile>, String> {
   Ok(out)
 }
 
+fn dir_is_project(dir: &Path) -> bool {
+  let Ok(entries) = fs::read_dir(dir) else {
+    return false;
+  };
+  for entry in entries.flatten() {
+    let name = entry.file_name().to_string_lossy().to_lowercase();
+    if name == "strata.json" || name.ends_with(".scene") {
+      return true;
+    }
+  }
+  false
+}
+
+fn first_scene_name(dir: &Path) -> Option<String> {
+  let entries = fs::read_dir(dir).ok()?;
+  let mut scenes: Vec<String> = entries
+    .flatten()
+    .filter(|e| e.path().is_file())
+    .map(|e| e.file_name().to_string_lossy().to_string())
+    .filter(|n| n.to_lowercase().ends_with(".scene"))
+    .collect();
+  scenes.sort_by(|a, b| a.to_lowercase().cmp(&b.to_lowercase()));
+  scenes.into_iter().next()
+}
+
+fn sanitize_project_name(name: &str) -> Result<String, String> {
+  let trimmed = name.trim();
+  if trimmed.is_empty() {
+    return Err("Name is empty".into());
+  }
+  if trimmed.contains('/') || trimmed.contains('\\') || trimmed.contains("..") {
+    return Err("Name cannot contain path separators".into());
+  }
+  if trimmed.starts_with('.') {
+    return Err("Name cannot start with a dot".into());
+  }
+  Ok(trimmed.to_string())
+}
+
+const NEW_PROJECT_SCENE: &str = r#"{
+  "version": 2,
+  "name": "main.scene",
+  "mode": "2d",
+  "entities": [
+    { "id": "ent_root", "name": "Root", "kind": "empty", "width": 24, "height": 24 }
+  ],
+  "prefabs": []
+}"#;
+
+const NEW_PROJECT_SETTINGS: &str = r#"{
+  "renderLayers": [{ "id": "layer_default", "name": "Default", "order": 0 }]
+}"#;
+
+#[tauri::command]
+fn list_project_entries(root: String) -> Result<Vec<ProjectEntry>, String> {
+  let root = PathBuf::from(&root);
+  if !root.is_dir() {
+    return Err("Not a directory".into());
+  }
+  let mut children = Vec::new();
+  let entries = fs::read_dir(&root).map_err(|e| e.to_string())?;
+  for entry in entries {
+    let entry = entry.map_err(|e| e.to_string())?;
+    let meta = entry.metadata().map_err(|e| e.to_string())?;
+    if !meta.is_dir() {
+      continue;
+    }
+    let name = entry.file_name().to_string_lossy().to_string();
+    if should_skip_dir(&name) {
+      continue;
+    }
+    let path = entry.path();
+    if !dir_is_project(&path) {
+      continue;
+    }
+    children.push(ProjectEntry {
+      name: name.clone(),
+      path: path.to_string_lossy().to_string(),
+      scene: first_scene_name(&path),
+      nested: true,
+    });
+  }
+  children.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+  if children.is_empty() && dir_is_project(&root) {
+    let name = root
+      .file_name()
+      .map(|n| n.to_string_lossy().to_string())
+      .filter(|s| !s.is_empty())
+      .unwrap_or_else(|| "Project".into());
+    return Ok(vec![ProjectEntry {
+      name,
+      path: root.to_string_lossy().to_string(),
+      scene: first_scene_name(&root),
+      nested: false,
+    }]);
+  }
+  Ok(children)
+}
+
+#[tauri::command]
+fn create_project_folder(root: String, name: String) -> Result<ProjectEntry, String> {
+  let name = sanitize_project_name(&name)?;
+  let root = PathBuf::from(&root);
+  if !root.is_dir() {
+    return Err("Not a directory".into());
+  }
+  let path = root.join(&name);
+  if path.exists() {
+    return Err("A folder with that name already exists".into());
+  }
+  fs::create_dir_all(&path).map_err(|e| e.to_string())?;
+  fs::write(path.join("strata.json"), NEW_PROJECT_SETTINGS).map_err(|e| e.to_string())?;
+  fs::write(path.join("main.scene"), NEW_PROJECT_SCENE).map_err(|e| e.to_string())?;
+  Ok(ProjectEntry {
+    name,
+    path: path.to_string_lossy().to_string(),
+    scene: Some("main.scene".into()),
+    nested: true,
+  })
+}
+
+#[tauri::command]
+fn create_project_dir(path: String) -> Result<(), String> {
+  let dest = PathBuf::from(&path);
+  let name = dest
+    .file_name()
+    .map(|n| n.to_string_lossy().to_string())
+    .unwrap_or_default();
+  if name.is_empty() || name == "." || name == ".." || name.starts_with('.') {
+    return Err("Invalid folder name".into());
+  }
+  if name.contains('/') || name.contains('\\') {
+    return Err("Name cannot contain path separators".into());
+  }
+  if dest.exists() {
+    return Err("A folder with that name already exists".into());
+  }
+  fs::create_dir_all(&dest).map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 fn write_project_file(path: String, contents: String) -> Result<(), String> {
   if let Some(parent) = Path::new(&path).parent() {
     fs::create_dir_all(parent).map_err(|e| e.to_string())?;
   }
-  fs::write(&path, contents).map_err(|e| e.to_string())
+  let mut file = fs::OpenOptions::new()
+    .create(true)
+    .write(true)
+    .truncate(true)
+    .open(&path)
+    .map_err(|e| e.to_string())?;
+  file
+    .write_all(contents.as_bytes())
+    .map_err(|e| e.to_string())?;
+  file.sync_all().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn write_project_file_base64(path: String, contents: String) -> Result<(), String> {
+  let bytes = data_decoding_base64(&contents)?;
+  if let Some(parent) = Path::new(&path).parent() {
+    fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+  }
+  fs::write(&path, bytes).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -314,6 +575,46 @@ fn data_encoding_base64(bytes: &[u8]) -> String {
   out
 }
 
+fn data_decoding_base64(s: &str) -> Result<Vec<u8>, String> {
+  const TABLE: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+  let mut rev = [0xffu8; 256];
+  for (i, b) in TABLE.iter().enumerate() {
+    rev[*b as usize] = i as u8;
+  }
+  let cleaned: Vec<u8> = s
+    .bytes()
+    .filter(|b| !b.is_ascii_whitespace())
+    .collect();
+  if cleaned.len() % 4 != 0 {
+    return Err("invalid base64".into());
+  }
+  let mut out = Vec::with_capacity(cleaned.len() / 4 * 3);
+  for chunk in cleaned.chunks_exact(4) {
+    let pad = chunk.iter().filter(|b| **b == b'=').count();
+    let mut n = 0u32;
+    for b in chunk {
+      let v = if *b == b'=' {
+        0
+      } else {
+        let d = rev[*b as usize];
+        if d == 0xff {
+          return Err("invalid base64".into());
+        }
+        d as u32
+      };
+      n = (n << 6) | v;
+    }
+    out.push((n >> 16) as u8);
+    if pad < 2 {
+      out.push((n >> 8) as u8);
+    }
+    if pad < 1 {
+      out.push(n as u8);
+    }
+  }
+  Ok(out)
+}
+
 #[tauri::command]
 fn engine_info() -> EngineInfo {
   EngineInfo {
@@ -334,66 +635,59 @@ struct EntityScript {
 
 #[tauri::command]
 fn engine_set_scripts(scripts: Vec<EntityScript>, state: State<EngineState>) -> Result<(), String> {
-  let mut host = state.host.lock().map_err(|e| e.to_string())?;
-  host.clear_scripts();
-  for s in scripts {
-    if let Some(name) = s.name.as_ref().filter(|n| !n.is_empty()) {
-      host.register_script(name, s.source.clone());
-    }
-    if s.entity_id.starts_with("__lib_") {
-      continue;
-    }
-    host.set_script(s.entity_id, s.source);
-  }
+  let mut session = state.session.lock().map_err(|e| e.to_string())?;
+  session.set_scripts(scripts.into_iter().map(|s| (s.entity_id, s.source, s.name)));
+  Ok(())
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AudioClipBinding {
+  name: String,
+  url: String,
+}
+
+#[tauri::command]
+fn engine_set_audio(clips: Vec<AudioClipBinding>, state: State<EngineState>) -> Result<(), String> {
+  let mut session = state.session.lock().map_err(|e| e.to_string())?;
+  session.set_audio(clips.into_iter().map(|c| (c.name, c.url)));
   Ok(())
 }
 
 #[tauri::command]
 fn engine_clear_play(state: State<EngineState>) -> Result<(), String> {
-  let mut host = state.host.lock().map_err(|e| e.to_string())?;
-  host.clear_scripts();
-  host.set_keys(String::new());
+  let mut session = state.session.lock().map_err(|e| e.to_string())?;
+  session.clear_play();
   Ok(())
 }
 
 #[tauri::command]
-fn engine_set_keys(keys: String, state: State<EngineState>) -> Result<(), String> {
-  let mut host = state.host.lock().map_err(|e| e.to_string())?;
-  host.set_keys(keys);
+fn engine_set_keys(
+  keys: String,
+  pressed: Option<String>,
+  state: State<EngineState>,
+) -> Result<(), String> {
+  let mut session = state.session.lock().map_err(|e| e.to_string())?;
+  session.set_keys(keys, pressed);
   Ok(())
 }
 
 #[tauri::command]
-fn engine_load_scene(scene: SceneFile, state: State<EngineState>) -> Result<EngineFrame, String> {
-  let mut world = state.world.lock().map_err(|e| e.to_string())?;
-  let mut host = state.host.lock().map_err(|e| e.to_string())?;
-  *world = World::from_scene(scene);
-  world.load(&mut *host);
-  Ok(EngineFrame {
-    scene: world.to_scene(),
-    stdout: host.last_stdout.clone(),
-    side_effects: side_effects_from_host(&host),
-    had_error: host.last_had_error,
-  })
+fn engine_load_scene(scene: SceneFile, state: State<EngineState>) -> Result<PlayFrame, String> {
+  let mut session = state.session.lock().map_err(|e| e.to_string())?;
+  Ok(session.load_scene(scene))
 }
 
 #[tauri::command]
 fn engine_snapshot(state: State<EngineState>) -> Result<SceneFile, String> {
-  let world = state.world.lock().map_err(|e| e.to_string())?;
-  Ok(world.to_scene())
+  let session = state.session.lock().map_err(|e| e.to_string())?;
+  Ok(session.snapshot())
 }
 
 #[tauri::command]
-fn engine_tick(dt: f32, state: State<EngineState>) -> Result<EngineFrame, String> {
-  let mut world = state.world.lock().map_err(|e| e.to_string())?;
-  let mut host = state.host.lock().map_err(|e| e.to_string())?;
-  world.tick(dt, &mut *host);
-  Ok(EngineFrame {
-    scene: world.to_scene(),
-    stdout: host.last_stdout.clone(),
-    side_effects: side_effects_from_host(&host),
-    had_error: host.last_had_error,
-  })
+fn engine_tick(dt: f32, state: State<EngineState>) -> Result<PlayFrame, String> {
+  let mut session = state.session.lock().map_err(|e| e.to_string())?;
+  Ok(session.tick(dt))
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -403,18 +697,33 @@ pub fn run() {
     .manage(EngineState::default())
     .invoke_handler(tauri::generate_handler![
       run_rosegold,
+      run_rosegold_preview,
+      check_rosegold,
+      def_rosegold,
+      hover_rosegold,
+      list_rosegold_exports,
+      list_rosegold_signals,
+      list_rosegold_fns,
+      list_rosegold_nodes,
+      stdlib_rosegold,
       run_rosegold_hooks,
       list_project_files,
+      list_project_entries,
+      create_project_folder,
+      create_project_dir,
       write_project_file,
+      write_project_file_base64,
       read_text_file,
       read_file_base64,
       engine_info,
       engine_set_scripts,
+      engine_set_audio,
       engine_set_keys,
       engine_clear_play,
       engine_load_scene,
       engine_snapshot,
-      engine_tick
+      engine_tick,
+      sync_view_menu
     ])
     .setup(|app| {
       if cfg!(debug_assertions) {

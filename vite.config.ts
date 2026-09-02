@@ -29,7 +29,18 @@ export default defineConfig({
         }
       : undefined,
     watch: {
-      ignored: ['**/src-tauri/**'],
+      // Game scripts/assets live in this repo. A .rg save must not
+      // full-reload the editor webview.
+      ignored: [
+        '**/src-tauri/**',
+        '**/crates/**',
+        '**/target/**',
+        '**/examples/**',
+        '**/*.rg',
+        '**/*.scene',
+        '**/*.wasm',
+        '**/*.md',
+      ],
     },
   },
 })

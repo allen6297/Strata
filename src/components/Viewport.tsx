@@ -1,7 +1,12 @@
 import { useEffect, useRef } from 'react'
 import { findPlayCamera, cameraWorldCenter, zoomForCamera } from '@/lib/runtime-camera'
+import { sortEntitiesForDraw } from '@/lib/draw-order'
+import { executeCanvasFrame } from '@/lib/render-canvas'
+import { buildRenderFrame } from '@/lib/render-frame'
+import { createWebGlRenderer } from '@/lib/render-webgl'
 import { entityMap, getWorldPosition } from '@/lib/transforms'
-import type { Entity, ToolMode } from '@/types/scene'
+import { tilemapBounds, tileSizeOf, worldToCell } from '@/lib/tilemap'
+import type { Entity, RenderLayer, ToolMode } from '@/types/scene'
 
 interface ViewportProps {
   entities: Entity[]
@@ -11,13 +16,26 @@ interface ViewportProps {
   snap: boolean
   gridSize?: number
   textureUrlById: Record<string, string>
+  renderLayers?: RenderLayer[]
   onSelect: (id: string | null, opts?: { additive?: boolean }) => void
   onMoveEntity: (id: string, worldX: number, worldY: number) => void
   onMoveBegin?: () => void
   onMoveEnd?: () => void
+  onSceneMenu?: (info: {
+    x: number
+    y: number
+    entityId: string | null
+    worldX: number
+    worldY: number
+  }) => void
+  onPlacePrefab?: (prefabId: string, worldX: number, worldY: number) => void
+  tileBrush?: number
+  onPaintBegin?: () => void
+  onPaintTile?: (id: string, col: number, row: number, index: number | null) => void
+  onPaintEnd?: () => void
 }
 
-type DragMode = 'pan' | 'entity' | 'gizmo-x' | 'gizmo-y' | null
+type DragMode = 'pan' | 'entity' | 'gizmo-x' | 'gizmo-y' | 'paint' | null
 
 function snapValue(n: number, grid: number, enabled: boolean) {
   if (!enabled || grid <= 0) return Math.round(n)
@@ -32,12 +50,20 @@ export function Viewport({
   snap,
   gridSize = 16,
   textureUrlById,
+  renderLayers = [],
   onSelect,
   onMoveEntity,
   onMoveBegin,
   onMoveEnd,
+  onSceneMenu,
+  onPlacePrefab,
+  tileBrush = 0,
+  onPaintBegin,
+  onPaintTile,
+  onPaintEnd,
 }: ViewportProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
+  const glCanvasRef = useRef<HTMLCanvasElement>(null)
   const wrapRef = useRef<HTMLDivElement>(null)
   const cameraRef = useRef({ x: 0, y: 0, zoom: 1 })
   const dragRef = useRef<{
@@ -49,6 +75,7 @@ export function Viewport({
     entityId: string | null
     entityOriginWorldX: number
     entityOriginWorldY: number
+    erase?: boolean
   }>({
     mode: null,
     startX: 0,
@@ -58,8 +85,8 @@ export function Viewport({
     entityId: null,
     entityOriginWorldX: 0,
     entityOriginWorldY: 0,
+    erase: false,
   })
-  const playTimeRef = useRef(0)
   const savedEditorCamRef = useRef<{ x: number; y: number; zoom: number } | null>(
     null,
   )
@@ -69,7 +96,21 @@ export function Viewport({
   const snapRef = useRef(snap)
   const gridRef = useRef(gridSize)
   const textureUrlRef = useRef(textureUrlById)
-  const imageCacheRef = useRef(new Map<string, HTMLImageElement>())
+  const layersRef = useRef(renderLayers)
+  const toolRef = useRef(tool)
+  const onSelectRef = useRef(onSelect)
+  const onMoveEntityRef = useRef(onMoveEntity)
+  const onMoveBeginRef = useRef(onMoveBegin)
+  const onMoveEndRef = useRef(onMoveEnd)
+  const imageCacheRef = useRef(
+    new Map<string, { url: string; img: HTMLImageElement }>(),
+  )
+  const sceneMenuRef = useRef(onSceneMenu)
+  const placePrefabRef = useRef(onPlacePrefab)
+  const tileBrushRef = useRef(tileBrush)
+  const paintBeginRef = useRef(onPaintBegin)
+  const paintTileRef = useRef(onPaintTile)
+  const paintEndRef = useRef(onPaintEnd)
 
   entitiesRef.current = entities
   selectedRef.current = selectedIds
@@ -77,15 +118,35 @@ export function Viewport({
   snapRef.current = snap
   gridRef.current = gridSize
   textureUrlRef.current = textureUrlById
+  layersRef.current = renderLayers
+  toolRef.current = tool
+  onSelectRef.current = onSelect
+  onMoveEntityRef.current = onMoveEntity
+  onMoveBeginRef.current = onMoveBegin
+  onMoveEndRef.current = onMoveEnd
+  sceneMenuRef.current = onSceneMenu
+  placePrefabRef.current = onPlacePrefab
+  tileBrushRef.current = tileBrush
+  paintBeginRef.current = onPaintBegin
+  paintTileRef.current = onPaintTile
+  paintEndRef.current = onPaintEnd
 
-  // Warm image cache when texture URLs change
+  // Warm image cache when texture URLs change; drop stale ids
   useEffect(() => {
+    const cache = imageCacheRef.current
+    const keep = new Set<string>()
     for (const [id, url] of Object.entries(textureUrlById)) {
-      if (!url || imageCacheRef.current.has(id)) continue
+      if (!url) continue
+      keep.add(id)
+      const hit = cache.get(id)
+      if (hit?.url === url) continue
       const img = new Image()
       img.decoding = 'async'
       img.src = url
-      imageCacheRef.current.set(id, img)
+      cache.set(id, { url, img })
+    }
+    for (const id of [...cache.keys()]) {
+      if (!keep.has(id)) cache.delete(id)
     }
   }, [textureUrlById])
 
@@ -95,29 +156,38 @@ export function Viewport({
     } else if (savedEditorCamRef.current) {
       cameraRef.current = { ...savedEditorCamRef.current }
       savedEditorCamRef.current = null
-      playTimeRef.current = 0
     }
   }, [playing])
 
+  // Mount the rAF loop once. Play ticks rewrite `entities`, which used to
+  // recreate onSelect and tear this effect down — assigning canvas.width
+  // clears the bitmap, so you only ever saw a stray frame.
   useEffect(() => {
     const canvas = canvasRef.current
     const wrap = wrapRef.current
     if (!canvas || !wrap) return
 
-    const ctx = canvas.getContext('2d')
+    const ctx = canvas.getContext('2d', { alpha: true })
     if (!ctx) return
+    const gl = glCanvasRef.current
+      ? createWebGlRenderer(glCanvasRef.current)
+      : null
 
     let raf = 0
-    let last = performance.now()
 
     const resize = () => {
       const dpr = window.devicePixelRatio || 1
       const { width, height } = wrap.getBoundingClientRect()
-      canvas.width = Math.max(1, Math.floor(width * dpr))
-      canvas.height = Math.max(1, Math.floor(height * dpr))
+      const nextW = Math.max(1, Math.floor(width * dpr))
+      const nextH = Math.max(1, Math.floor(height * dpr))
+      if (canvas.width !== nextW || canvas.height !== nextH) {
+        canvas.width = nextW
+        canvas.height = nextH
+      }
       canvas.style.width = `${width}px`
       canvas.style.height = `${height}px`
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+      gl?.resize(width, height, dpr)
     }
 
     const worldFromScreen = (sx: number, sy: number) => {
@@ -140,20 +210,33 @@ export function Viewport({
       const byId = entityMap(entitiesRef.current)
       const world = getWorldPosition(e, byId)
       const handle = 10 / cameraRef.current.zoom
-      const arm = Math.max(28, Math.min(e.width, e.height) * 0.75)
-      // X handle at +arm
+      const arm =
+        e.kind === 'tilemap'
+          ? Math.max(28, tileSizeOf(e) * 2)
+          : Math.max(28, Math.min(e.width, e.height) * 0.75)
       if (Math.hypot(wx - (world.x + arm), wy - world.y) <= handle) return 'x'
-      // Y handle at -arm (up in screen space is -y in our world if y increases down... our y increases down like canvas)
       if (Math.hypot(wx - world.x, wy - (world.y - arm)) <= handle) return 'y'
       return null
     }
 
     const hitTest = (wx: number, wy: number) => {
       const byId = entityMap(entitiesRef.current)
-      const list = [...entitiesRef.current].reverse()
+      const list = [...sortEntitiesForDraw(entitiesRef.current, layersRef.current)].reverse()
       for (const e of list) {
         if (!e.visible) continue
         const world = getWorldPosition(e, byId)
+        if (e.kind === 'tilemap') {
+          const b = tilemapBounds(e, world)
+          if (
+            wx >= b.x &&
+            wx < b.x + b.w &&
+            wy >= b.y &&
+            wy < b.y + b.h
+          ) {
+            return e
+          }
+          continue
+        }
         const cos = Math.cos((-e.rotation * Math.PI) / 180)
         const sin = Math.sin((-e.rotation * Math.PI) / 180)
         const dx = wx - world.x
@@ -167,91 +250,146 @@ export function Viewport({
       return null
     }
 
-    const draw = (now: number) => {
-      const dt = (now - last) / 1000
-      last = now
-      if (playingRef.current) playTimeRef.current += dt
-
+    const paintFrame = () => {
       const rect = wrap.getBoundingClientRect()
       const w = rect.width
       const h = rect.height
       const cam = cameraRef.current
-      const t = playTimeRef.current
       const byId = entityMap(entitiesRef.current)
       const grid = gridRef.current
       const inPlay = playingRef.current
+      const dpr = window.devicePixelRatio || 1
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+
+      if (!Number.isFinite(cam.x)) cam.x = 0
+      if (!Number.isFinite(cam.y)) cam.y = 0
+      if (!Number.isFinite(cam.zoom) || cam.zoom <= 0) cam.zoom = 1
 
       if (inPlay) {
         const playCam = findPlayCamera(entitiesRef.current)
         if (playCam) {
           const center = cameraWorldCenter(entitiesRef.current, playCam)
-          cam.x = center.x
-          cam.y = center.y
-          cam.zoom = zoomForCamera(playCam, w, h)
+          if (Number.isFinite(center.x)) cam.x = center.x
+          if (Number.isFinite(center.y)) cam.y = center.y
+          const z = zoomForCamera(playCam, w, h)
+          if (Number.isFinite(z) && z > 0) cam.zoom = z
         }
       }
 
-      ctx.clearRect(0, 0, w, h)
-      ctx.fillStyle = '#0e1014'
-      ctx.fillRect(0, 0, w, h)
+      const left = cam.x - w / 2 / cam.zoom
+      const right = cam.x + w / 2 / cam.zoom
+      const top = cam.y - h / 2 / cam.zoom
+      const bottom = cam.y + h / 2 / cam.zoom
+      const frame = buildRenderFrame(entitiesRef.current, layersRef.current, {
+        left,
+        right,
+        top,
+        bottom,
+      })
+
+      if (gl) {
+        gl.resize(w, h, dpr)
+        const gcol = inPlay
+          ? ([26 / 255, 31 / 255, 42 / 255, 1] as const)
+          : snapRef.current
+            ? ([42 / 255, 51 / 255, 68 / 255, 1] as const)
+            : ([31 / 255, 36 / 255, 48 / 255, 1] as const)
+        gl.draw(frame, imageCacheRef.current, cam, w, h, {
+          size: grid,
+          color: [gcol[0], gcol[1], gcol[2], gcol[3]],
+          axis: [58 / 255, 65 / 255, 80 / 255, 1],
+        })
+        ctx.clearRect(0, 0, w, h)
+      } else {
+        ctx.clearRect(0, 0, w, h)
+        ctx.fillStyle = '#0e1014'
+        ctx.fillRect(0, 0, w, h)
+      }
 
       ctx.save()
       ctx.translate(w / 2, h / 2)
       ctx.scale(cam.zoom, cam.zoom)
       ctx.translate(-cam.x, -cam.y)
 
-      const left = cam.x - w / 2 / cam.zoom
-      const right = cam.x + w / 2 / cam.zoom
-      const top = cam.y - h / 2 / cam.zoom
-      const bottom = cam.y + h / 2 / cam.zoom
-      const startX = Math.floor(left / grid) * grid
-      const startY = Math.floor(top / grid) * grid
-
-      ctx.strokeStyle = inPlay ? '#1a1f2a' : snapRef.current ? '#2a3344' : '#1f2430'
-      ctx.lineWidth = 1 / cam.zoom
-      ctx.beginPath()
-      for (let x = startX; x <= right; x += grid) {
-        ctx.moveTo(x, top)
-        ctx.lineTo(x, bottom)
+      if (!gl) {
+        if (Number.isFinite(grid) && grid > 0) {
+          const startX = Math.floor(left / grid) * grid
+          const startY = Math.floor(top / grid) * grid
+          ctx.strokeStyle = inPlay
+            ? '#1a1f2a'
+            : snapRef.current
+              ? '#2a3344'
+              : '#1f2430'
+          ctx.lineWidth = 1 / cam.zoom
+          ctx.beginPath()
+          let lines = 0
+          for (let x = startX; x <= right && lines < 512; x += grid, lines++) {
+            ctx.moveTo(x, top)
+            ctx.lineTo(x, bottom)
+          }
+          lines = 0
+          for (let y = startY; y <= bottom && lines < 512; y += grid, lines++) {
+            ctx.moveTo(left, y)
+            ctx.lineTo(right, y)
+          }
+          ctx.stroke()
+        }
+        ctx.strokeStyle = '#3a4150'
+        ctx.beginPath()
+        ctx.moveTo(left, 0)
+        ctx.lineTo(right, 0)
+        ctx.moveTo(0, top)
+        ctx.lineTo(0, bottom)
+        ctx.stroke()
+        executeCanvasFrame(ctx, frame, imageCacheRef.current)
       }
-      for (let y = startY; y <= bottom; y += grid) {
-        ctx.moveTo(left, y)
-        ctx.lineTo(right, y)
-      }
-      ctx.stroke()
 
-      ctx.strokeStyle = '#3a4150'
-      ctx.beginPath()
-      ctx.moveTo(left, 0)
-      ctx.lineTo(right, 0)
-      ctx.moveTo(0, top)
-      ctx.lineTo(0, bottom)
-      ctx.stroke()
-
-      for (const e of entitiesRef.current) {
+      for (const e of sortEntitiesForDraw(entitiesRef.current, layersRef.current)) {
         if (!e.visible) continue
         if (inPlay && e.kind === 'camera') continue
         const world = getWorldPosition(e, byId)
         ctx.save()
-        const bob =
-          playingRef.current && e.kind === 'sprite'
-            ? Math.sin(t * 3 + world.x * 0.01) * 4
-            : 0
-        ctx.translate(world.x, world.y + bob)
-        ctx.rotate((e.rotation * Math.PI) / 180)
+        ctx.translate(world.x, world.y)
+        if (e.kind !== 'tilemap') {
+          ctx.rotate((e.rotation * Math.PI) / 180)
+        }
 
-        if (e.kind === 'sprite') {
-          const texId = e.textureId
-          const img = texId ? imageCacheRef.current.get(texId) : undefined
-          if (img && img.complete && img.naturalWidth > 0) {
-            ctx.drawImage(img, -e.width / 2, -e.height / 2, e.width, e.height)
-          } else {
-            ctx.fillStyle = e.color
-            ctx.fillRect(-e.width / 2, -e.height / 2, e.width, e.height)
+        if (e.kind === 'tilemap') {
+          if (!inPlay && selectedRef.current.includes(e.id)) {
+            const ts = tileSizeOf(e)
+            const b = tilemapBounds(e, { x: 0, y: 0 })
+            ctx.strokeStyle = 'rgba(61, 184, 168, 0.45)'
+            ctx.lineWidth = 1 / cam.zoom
+            ctx.setLineDash([4 / cam.zoom, 3 / cam.zoom])
+            ctx.strokeRect(b.x, b.y, b.w, b.h)
+            ctx.setLineDash([])
+            const gw = Math.max(b.w, ts)
+            const gh = Math.max(b.h, ts)
+            ctx.strokeStyle = 'rgba(61, 184, 168, 0.18)'
+            ctx.beginPath()
+            for (let x = b.x; x <= b.x + gw + 0.01; x += ts) {
+              ctx.moveTo(x, b.y)
+              ctx.lineTo(x, b.y + gh)
+            }
+            for (let y = b.y; y <= b.y + gh + 0.01; y += ts) {
+              ctx.moveTo(b.x, y)
+              ctx.lineTo(b.x + gw, y)
+            }
+            ctx.stroke()
           }
-          ctx.strokeStyle = 'rgba(255,255,255,0.12)'
-          ctx.lineWidth = 1 / cam.zoom
-          ctx.strokeRect(-e.width / 2, -e.height / 2, e.width, e.height)
+        } else if (e.kind === 'sprite') {
+          if (selectedRef.current.includes(e.id) && !inPlay) {
+            ctx.strokeStyle = '#3db8a8'
+            ctx.lineWidth = 2 / cam.zoom
+            ctx.setLineDash([4 / cam.zoom, 3 / cam.zoom])
+            ctx.strokeRect(
+              -e.width / 2 - 4,
+              -e.height / 2 - 4,
+              e.width + 8,
+              e.height + 8,
+            )
+            ctx.setLineDash([])
+          }
         } else if (e.kind === 'camera') {
           ctx.strokeStyle = '#3db8a8'
           ctx.lineWidth = 2 / cam.zoom
@@ -269,7 +407,7 @@ export function Viewport({
           ctx.stroke()
         }
 
-        if (selectedRef.current.includes(e.id) && !inPlay) {
+        if (selectedRef.current.includes(e.id) && !inPlay && e.kind !== 'tilemap' && e.kind !== 'sprite') {
           ctx.strokeStyle = '#3db8a8'
           ctx.lineWidth = 2 / cam.zoom
           ctx.setLineDash([4 / cam.zoom, 3 / cam.zoom])
@@ -286,7 +424,12 @@ export function Viewport({
 
         if (!inPlay) {
           ctx.save()
-          ctx.translate(world.x, world.y + bob - e.height / 2 - 10 / cam.zoom)
+          if (e.kind === 'tilemap') {
+            const b = tilemapBounds(e, world)
+            ctx.translate(b.x + b.w / 2, b.y - 10 / cam.zoom)
+          } else {
+            ctx.translate(world.x, world.y - e.height / 2 - 10 / cam.zoom)
+          }
           ctx.scale(1 / cam.zoom, 1 / cam.zoom)
           ctx.fillStyle = selectedRef.current.includes(e.id)
             ? '#e8eaef'
@@ -298,16 +441,17 @@ export function Viewport({
         }
       }
 
-      // Transform gizmo on primary selection (edit mode only)
       const primary = primarySelected()
-      if (primary && primary.visible && tool === 'select' && !inPlay) {
+      if (primary && primary.visible && toolRef.current === 'select' && !inPlay) {
         const world = getWorldPosition(primary, byId)
-        const arm = Math.max(28, Math.min(primary.width, primary.height) * 0.75)
+        const arm =
+          primary.kind === 'tilemap'
+            ? Math.max(28, tileSizeOf(primary) * 2)
+            : Math.max(28, Math.min(primary.width, primary.height) * 0.75)
         const handle = 5 / cam.zoom
 
         ctx.save()
         ctx.translate(world.x, world.y)
-        // X axis
         ctx.strokeStyle = '#e06c75'
         ctx.fillStyle = '#e06c75'
         ctx.lineWidth = 2 / cam.zoom
@@ -325,7 +469,6 @@ export function Viewport({
         ctx.arc(arm, 0, handle, 0, Math.PI * 2)
         ctx.fill()
 
-        // Y axis (up = negative y)
         ctx.strokeStyle = '#98c379'
         ctx.fillStyle = '#98c379'
         ctx.beginPath()
@@ -368,7 +511,14 @@ export function Viewport({
       } else {
         ctx.fillText(`cam ${cam.x.toFixed(0)}, ${cam.y.toFixed(0)} · grid ${grid}`, 18, 44)
       }
+    }
 
+    const draw = () => {
+      try {
+        paintFrame()
+      } catch (err) {
+        console.error('viewport draw', err)
+      }
       raf = requestAnimationFrame(draw)
     }
 
@@ -380,13 +530,27 @@ export function Viewport({
       cam.zoom = Math.min(4, Math.max(0.25, cam.zoom * factor))
     }
 
+    const paintAt = (wx: number, wy: number, erase: boolean) => {
+      const map = primarySelected()
+      if (!map || map.kind !== 'tilemap' || map.locked) return
+      const byId = entityMap(entitiesRef.current)
+      const origin = getWorldPosition(map, byId)
+      const cell = worldToCell(origin, tileSizeOf(map), wx, wy)
+      paintTileRef.current?.(
+        map.id,
+        cell.x,
+        cell.y,
+        erase ? null : tileBrushRef.current,
+      )
+    }
+
     const onPointerDown = (e: PointerEvent) => {
       if (playingRef.current) return
       const world = worldFromScreen(e.clientX, e.clientY)
-      const wantsPan = tool === 'move' || e.button === 1 || e.altKey
+      const wantsPan = toolRef.current === 'move' || e.button === 1 || e.altKey
       const byId = entityMap(entitiesRef.current)
 
-      if (e.button === 0 && tool === 'select') {
+      if (e.button === 0 && toolRef.current === 'select') {
         const axis = gizmoHit(world.x, world.y)
         const primary = primarySelected()
         if (axis && primary && !primary.locked) {
@@ -401,7 +565,38 @@ export function Viewport({
             entityOriginWorldX: wpos.x,
             entityOriginWorldY: wpos.y,
           }
-          onMoveBegin?.()
+          onMoveBeginRef.current?.()
+          canvas.setPointerCapture(e.pointerId)
+          return
+        }
+      }
+
+      const primary = primarySelected()
+      const wantsErase = e.button === 2 || e.shiftKey
+      if (
+        !playingRef.current &&
+        toolRef.current === 'select' &&
+        primary?.kind === 'tilemap' &&
+        !primary.locked &&
+        paintTileRef.current &&
+        (e.button === 0 || e.button === 2)
+      ) {
+        const hit = hitTest(world.x, world.y)
+        if (!hit || hit.id === primary.id) {
+          if (e.button === 2) e.preventDefault()
+          paintBeginRef.current?.()
+          dragRef.current = {
+            mode: 'paint',
+            startX: e.clientX,
+            startY: e.clientY,
+            originCamX: cameraRef.current.x,
+            originCamY: cameraRef.current.y,
+            entityId: primary.id,
+            entityOriginWorldX: 0,
+            entityOriginWorldY: 0,
+            erase: wantsErase,
+          }
+          paintAt(world.x, world.y, wantsErase)
           canvas.setPointerCapture(e.pointerId)
           return
         }
@@ -409,8 +604,8 @@ export function Viewport({
 
       const hit = hitTest(world.x, world.y)
 
-      if (e.button === 0 && hit && tool === 'select') {
-        onSelect(hit.id, { additive: e.metaKey || e.ctrlKey })
+      if (e.button === 0 && hit && toolRef.current === 'select') {
+        onSelectRef.current(hit.id, { additive: e.metaKey || e.ctrlKey })
         if (!hit.locked) {
           const wpos = getWorldPosition(hit, byId)
           dragRef.current = {
@@ -423,14 +618,14 @@ export function Viewport({
             entityOriginWorldX: wpos.x,
             entityOriginWorldY: wpos.y,
           }
-          onMoveBegin?.()
+          onMoveBeginRef.current?.()
         }
         canvas.setPointerCapture(e.pointerId)
         return
       }
 
-      if (e.button === 0 && !hit && tool === 'select' && !e.altKey) {
-        onSelect(null)
+      if (e.button === 0 && !hit && toolRef.current === 'select' && !e.altKey) {
+        onSelectRef.current(null)
         return
       }
 
@@ -462,23 +657,26 @@ export function Viewport({
         cam.x = drag.originCamX - dx
         cam.y = drag.originCamY - dy
       } else if (drag.mode === 'entity' && drag.entityId) {
-        onMoveEntity(
+        onMoveEntityRef.current(
           drag.entityId,
           snapValue(drag.entityOriginWorldX + dx, grid, doSnap),
           snapValue(drag.entityOriginWorldY + dy, grid, doSnap),
         )
       } else if (drag.mode === 'gizmo-x' && drag.entityId) {
-        onMoveEntity(
+        onMoveEntityRef.current(
           drag.entityId,
           snapValue(drag.entityOriginWorldX + dx, grid, doSnap),
           drag.entityOriginWorldY,
         )
       } else if (drag.mode === 'gizmo-y' && drag.entityId) {
-        onMoveEntity(
+        onMoveEntityRef.current(
           drag.entityId,
           drag.entityOriginWorldX,
           snapValue(drag.entityOriginWorldY + dy, grid, doSnap),
         )
+      } else if (drag.mode === 'paint') {
+        const world = worldFromScreen(e.clientX, e.clientY)
+        paintAt(world.x, world.y, Boolean(drag.erase))
       }
     }
 
@@ -488,10 +686,30 @@ export function Viewport({
         dragRef.current.mode === 'gizmo-x' ||
         dragRef.current.mode === 'gizmo-y'
       ) {
-        onMoveEnd?.()
+        onMoveEndRef.current?.()
+      }
+      if (dragRef.current.mode === 'paint') {
+        paintEndRef.current?.()
       }
       dragRef.current.mode = null
       dragRef.current.entityId = null
+    }
+
+    const onContextMenu = (e: MouseEvent) => {
+      e.preventDefault()
+      if (playingRef.current) return
+      if (dragRef.current.mode === 'paint') return
+      const world = worldFromScreen(e.clientX, e.clientY)
+      const hit = hitTest(world.x, world.y)
+      const grid = gridRef.current
+      const doSnap = snapRef.current
+      sceneMenuRef.current?.({
+        x: e.clientX,
+        y: e.clientY,
+        entityId: hit?.id ?? null,
+        worldX: snapValue(world.x, grid, doSnap),
+        worldY: snapValue(world.y, grid, doSnap),
+      })
     }
 
     resize()
@@ -502,18 +720,45 @@ export function Viewport({
     canvas.addEventListener('pointermove', onPointerMove)
     canvas.addEventListener('pointerup', onPointerUp)
     canvas.addEventListener('pointercancel', onPointerUp)
+    canvas.addEventListener('contextmenu', onContextMenu)
+
+    const onDragOver = (e: DragEvent) => {
+      if (!placePrefabRef.current) return
+      e.preventDefault()
+      if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy'
+    }
+    const onDrop = (e: DragEvent) => {
+      const id = e.dataTransfer?.getData('text/strata-prefab')
+      if (!id) return
+      e.preventDefault()
+      const world = worldFromScreen(e.clientX, e.clientY)
+      const grid = gridRef.current
+      placePrefabRef.current?.(
+        id,
+        snapValue(world.x, grid, snapRef.current),
+        snapValue(world.y, grid, snapRef.current),
+      )
+    }
+    wrap.addEventListener('dragover', onDragOver)
+    wrap.addEventListener('drop', onDrop)
     raf = requestAnimationFrame(draw)
 
     return () => {
       cancelAnimationFrame(raf)
+      gl?.destroy()
       ro.disconnect()
       canvas.removeEventListener('wheel', onWheel)
       canvas.removeEventListener('pointerdown', onPointerDown)
       canvas.removeEventListener('pointermove', onPointerMove)
       canvas.removeEventListener('pointerup', onPointerUp)
       canvas.removeEventListener('pointercancel', onPointerUp)
+      canvas.removeEventListener('contextmenu', onContextMenu)
+      wrap.removeEventListener('dragover', onDragOver)
+      wrap.removeEventListener('drop', onDrop)
     }
-  }, [tool, playing, onSelect, onMoveEntity, onMoveBegin, onMoveEnd])
+    // Intentionally empty: all inputs are refs so Play ticks do not remount.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   return (
     <div
@@ -521,8 +766,13 @@ export function Viewport({
       className="relative h-full min-h-0 w-full bg-[var(--viewport)]"
     >
       <canvas
+        ref={glCanvasRef}
+        className="pointer-events-none absolute inset-0 block h-full w-full"
+        aria-hidden
+      />
+      <canvas
         ref={canvasRef}
-        className="block h-full w-full touch-none"
+        className="absolute inset-0 block h-full w-full touch-none"
         style={{ cursor: tool === 'move' ? 'grab' : 'default' }}
       />
     </div>

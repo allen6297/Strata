@@ -1,5 +1,9 @@
-use tauri::menu::{AboutMetadata, MenuBuilder, MenuItemBuilder, SubmenuBuilder};
-use tauri::Emitter;
+use serde::Deserialize;
+use tauri::menu::{
+  AboutMetadata, CheckMenuItemBuilder, MenuBuilder, MenuItemBuilder, MenuItemKind,
+  SubmenuBuilder,
+};
+use tauri::{AppHandle, Emitter, Runtime};
 
 pub fn install(app: &tauri::App) -> tauri::Result<()> {
   let handle = app.handle();
@@ -99,7 +103,10 @@ pub fn install(app: &tauri::App) -> tauri::Result<()> {
 
   // MARK: - Insert
   let insert = SubmenuBuilder::new(handle, "Insert")
+    .text("add_node", "Add Node…")
+    .separator()
     .text("add_sprite", "Sprite")
+    .text("add_tilemap", "Tilemap")
     .text("add_empty", "Empty")
     .text("add_camera", "Camera")
     .text("add_mesh", "Mesh")
@@ -128,14 +135,21 @@ pub fn install(app: &tauri::App) -> tauri::Result<()> {
   let reset_layout = MenuItemBuilder::new("Reset Layout")
     .id("reset_layout")
     .build(handle)?;
-  let toggle_hierarchy = MenuItemBuilder::new("Hierarchy")
+  let toggle_hierarchy = CheckMenuItemBuilder::new("Hierarchy")
     .id("toggle_hierarchy")
+    .checked(true)
     .build(handle)?;
-  let toggle_inspector = MenuItemBuilder::new("Inspector")
+  let toggle_inspector = CheckMenuItemBuilder::new("Inspector")
     .id("toggle_inspector")
+    .checked(true)
     .build(handle)?;
-  let toggle_assets = MenuItemBuilder::new("Assets")
+  let toggle_assets = CheckMenuItemBuilder::new("Files")
     .id("toggle_assets")
+    .checked(true)
+    .build(handle)?;
+  let toggle_log = CheckMenuItemBuilder::new("Log")
+    .id("toggle_log")
+    .checked(true)
     .build(handle)?;
 
   let view = SubmenuBuilder::new(handle, "View")
@@ -149,6 +163,7 @@ pub fn install(app: &tauri::App) -> tauri::Result<()> {
     .item(&toggle_hierarchy)
     .item(&toggle_inspector)
     .item(&toggle_assets)
+    .item(&toggle_log)
     .separator()
     .item(&reset_layout)
     .build()?;
@@ -198,4 +213,67 @@ pub fn install(app: &tauri::App) -> tauri::Result<()> {
   });
 
   Ok(())
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ViewPanelChecks {
+  pub hierarchy: bool,
+  pub inspector: bool,
+  pub assets: bool,
+  pub log: bool,
+}
+
+#[tauri::command]
+pub fn sync_view_menu(
+  hierarchy: bool,
+  inspector: bool,
+  assets: bool,
+  log: bool,
+  app: AppHandle,
+) {
+  apply_view_checks(
+    &app,
+    &ViewPanelChecks {
+      hierarchy,
+      inspector,
+      assets,
+      log,
+    },
+  );
+}
+
+fn apply_view_checks<R: Runtime>(app: &AppHandle<R>, checks: &ViewPanelChecks) {
+  let Some(menu) = app.menu() else {
+    return;
+  };
+  let Ok(items) = menu.items() else {
+    return;
+  };
+  set_checks_in_items(&items, checks);
+}
+
+fn set_checks_in_items<R: Runtime>(items: &[MenuItemKind<R>], checks: &ViewPanelChecks) {
+  for kind in items {
+    match kind {
+      MenuItemKind::Check(item) => {
+        let id = item.id().0.as_str();
+        let checked = match id {
+          "toggle_hierarchy" => Some(checks.hierarchy),
+          "toggle_inspector" => Some(checks.inspector),
+          "toggle_assets" => Some(checks.assets),
+          "toggle_log" => Some(checks.log),
+          _ => None,
+        };
+        if let Some(on) = checked {
+          let _ = item.set_checked(on);
+        }
+      }
+      MenuItemKind::Submenu(sub) => {
+        if let Ok(children) = sub.items() {
+          set_checks_in_items(&children, checks);
+        }
+      }
+      _ => {}
+    }
+  }
 }

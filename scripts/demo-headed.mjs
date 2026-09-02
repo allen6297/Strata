@@ -7,6 +7,7 @@ async function main() {
   })
   const page = await browser.newPage({ viewport: { width: 1400, height: 900 } })
   await page.goto('http://127.0.0.1:4521/', { waitUntil: 'networkidle' })
+  await page.getByTestId('continue-demo').click()
   await page.waitForTimeout(800)
 
   await page.getByText('Coin', { exact: true }).click()
@@ -17,6 +18,7 @@ async function main() {
   await page.getByTestId('inspector-y').fill('-60')
   await page.waitForTimeout(600)
 
+  await page.getByTestId('add-node').click()
   await page.getByTestId('add-sprite').click()
   await page.waitForTimeout(700)
 

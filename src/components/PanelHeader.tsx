@@ -24,7 +24,7 @@ export function PanelHeader({
   return (
     <div
       className={cn(
-        'flex h-7 shrink-0 items-center gap-2 border-b border-[var(--border)] px-2.5',
+        'flex h-8 shrink-0 items-center gap-2 border-b border-[var(--border)] px-2',
         className,
       )}
     >

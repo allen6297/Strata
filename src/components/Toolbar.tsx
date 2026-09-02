@@ -1,17 +1,16 @@
 import { Button } from '@/components/ui/button'
+import { SceneModeTab } from '@/components/SceneModeTab'
 import { isTauri } from '@/lib/tauri'
 import type { ThemeMode } from '@/lib/theme'
 import type { SceneMode, ToolMode } from '@/types/scene'
 import {
   Box,
-  Camera,
-  Circle,
+  ChevronDown,
   Copy,
   FileCode2,
   FolderKanban,
   FolderOpen,
   Hand,
-  Lightbulb,
   Magnet,
   Moon,
   MousePointer2,
@@ -20,7 +19,6 @@ import {
   Plus,
   Redo2,
   Save,
-  Square,
   Sun,
   Trash2,
   Undo2,
@@ -44,12 +42,7 @@ interface ToolbarProps {
   onToolChange: (tool: ToolMode) => void
   onSnapToggle: () => void
   onPlayToggle: () => void
-  onAddSprite: () => void
-  onAddEmpty: () => void
-  onAddCamera: () => void
-  onAddMesh: () => void
-  onAddLight: () => void
-  onAddScript: () => void
+  onAddNode: (anchor: HTMLElement) => void
   onCreateScriptAsset: () => void
   onDelete: () => void
   onDuplicate: () => void
@@ -60,6 +53,7 @@ interface ToolbarProps {
   onOpenProject: () => void
   onSaveProject: () => void
   onThemeToggle: () => void
+  onModeChange: (mode: SceneMode) => void
 }
 
 function Group({ children }: { children: ReactNode }) {
@@ -92,12 +86,7 @@ export function Toolbar({
   onToolChange,
   onSnapToggle,
   onPlayToggle,
-  onAddSprite,
-  onAddEmpty,
-  onAddCamera,
-  onAddMesh,
-  onAddLight,
-  onAddScript,
+  onAddNode,
   onCreateScriptAsset,
   onDelete,
   onDuplicate,
@@ -108,6 +97,7 @@ export function Toolbar({
   onOpenProject,
   onSaveProject,
   onThemeToggle,
+  onModeChange,
 }: ToolbarProps) {
   const editingScript = mode === 'script'
 
@@ -125,8 +115,15 @@ export function Toolbar({
         </div>
       </div>
 
+      <SceneModeTab
+        mode={mode}
+        onModeChange={onModeChange}
+        variant="inline"
+      />
+
       {!editingScript && (
         <>
+          <Sep />
           <Group>
             <Button
               variant="toolbar"
@@ -209,78 +206,14 @@ export function Toolbar({
           <Button
             variant="ghost"
             size="sm"
-            data-testid="add-sprite"
-            onClick={onAddSprite}
-            title="Add Sprite"
+            data-testid="add-node"
+            onClick={(e) => onAddNode(e.currentTarget)}
+            title="Add node (Shift+A)"
             className="px-1.5"
           >
             <Plus className="h-3 w-3" />
-            <Square className="h-3 w-3" />
-            <span className="hidden sm:inline">Sprite</span>
-          </Button>
-          <Button
-            variant="ghost"
-            size="sm"
-            data-testid="add-empty"
-            onClick={onAddEmpty}
-            title="Add Empty"
-            className="px-1.5"
-          >
-            <Plus className="h-3 w-3" />
-            <Circle className="h-3 w-3" />
-            <span className="hidden sm:inline">Empty</span>
-          </Button>
-          <Button
-            variant="ghost"
-            size="sm"
-            data-testid="add-camera"
-            onClick={onAddCamera}
-            title="Add Camera"
-            className="px-1.5"
-          >
-            <Plus className="h-3 w-3" />
-            <Camera className="h-3 w-3" />
-            <span className="hidden sm:inline">Camera</span>
-          </Button>
-          {mode === '3d' && (
-            <>
-              <Button
-                variant="ghost"
-                size="sm"
-                data-testid="add-mesh"
-                onClick={onAddMesh}
-                title="Add Mesh"
-                className="px-1.5"
-              >
-                <Plus className="h-3 w-3" />
-                <Box className="h-3 w-3" />
-                <span className="hidden sm:inline">Mesh</span>
-              </Button>
-              <Button
-                variant="ghost"
-                size="sm"
-                data-testid="add-light"
-                onClick={onAddLight}
-                title="Add Light"
-                className="px-1.5"
-              >
-                <Plus className="h-3 w-3" />
-                <Lightbulb className="h-3 w-3" />
-                <span className="hidden sm:inline">Light</span>
-              </Button>
-            </>
-          )}
-          <Button
-            variant="ghost"
-            size="sm"
-            data-testid="add-script"
-            onClick={onAddScript}
-            title="Add Script entity"
-            className="px-1.5"
-          >
-            <Plus className="h-3 w-3" />
-            <FileCode2 className="h-3 w-3" />
-            <span className="hidden sm:inline">Script</span>
+            <span className="hidden sm:inline">Node</span>
+            <ChevronDown className="h-3 w-3 opacity-70" />
           </Button>
           <Button
             variant="toolbar"
@@ -334,7 +267,7 @@ export function Toolbar({
           variant="toolbar"
           size="icon"
           onClick={onOpenProject}
-          title="Open project folder"
+          title="Projects"
           data-testid="open-project"
         >
           <FolderKanban className="h-3.5 w-3.5" />
@@ -362,7 +295,7 @@ export function Toolbar({
           variant="default"
           size="sm"
           onClick={onSave}
-          title="Save scene (Ctrl+S)"
+          title="Save scene and .rg files (Ctrl+S)"
           data-testid="save-scene"
           className="h-7"
         >

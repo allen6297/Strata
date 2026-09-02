@@ -6,6 +6,7 @@
    Accent leans peach (#F2C8B4) so selection/brand pop on dark. */
 :root,
 [data-theme='dark'] {
+  color-scheme: dark;
   --bg-app: #1a0e12;
   --bg-panel: #2a151c;
   --bg-panel-raised: #3d1f2a;
@@ -34,10 +35,14 @@
     #d4a574 100%
   );
   --pulse-accent: 242, 200, 180;
+  --syntax-string: #e8c48a;
+  --syntax-function: #f7ede6;
+  --syntax-directive: #f2c8b4;
 }
 
 /* Tile / Pillars — light */
 [data-theme='light'] {
+  color-scheme: light;
   --bg-app: #f7ede6;
   --bg-panel: #f0e2d8;
   --bg-panel-raised: #e8d5c8;
@@ -66,6 +71,9 @@
     #a67c52 100%
   );
   --pulse-accent: 183, 110, 121;
+  --syntax-string: #8a6232;
+  --syntax-function: #3a1e28;
+  --syntax-directive: #b76e79;
 }
 
 * {
@@ -162,4 +170,16 @@ body.dock-dragging * {
 
 .dock-tab {
   touch-action: none;
+}
+
+.cm-editor {
+  height: 100%;
+}
+
+.cm-editor .cm-scroller {
+  font-family: 'IBM Plex Mono', ui-monospace, monospace;
+}
+
+.cm-tooltip {
+  z-index: 40;
 }

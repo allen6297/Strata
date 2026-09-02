@@ -19,8 +19,13 @@ pub enum TokenKind {
   Continue,
   Match,
   Struct,
+  Class,
+  Trait,
+  Extends,
   Enum,
   Impl,
+  Mod,
+  Signal,
   Pub,
   True,
   False,
@@ -58,6 +63,15 @@ pub enum TokenKind {
   AndAnd,
   OrOr,
   Bang,
+  Amp,
+  Pipe,
+  Caret,
+  Tilde,
+  Shl,
+  Shr,
+  AmpAssign,
+  PipeAssign,
+  CaretAssign,
   Assign,
   PlusAssign,
   MinusAssign,
@@ -78,8 +92,12 @@ pub enum TokenKind {
   Dot,
   Comma,
   Question,
-  Arrow, // -> not used yet but tokenized
+  Arrow, // `->` return type, same as `:` after `)`
   At,
+  /// `##` rest-of-line. Attaches to the next parsed item. `#` is skipped, not this.
+  DocComment(String),
+  /// `#` line comment. Kept so `fmt` can reprint it.
+  Comment(String),
   // Special
   Eof,
 }
@@ -128,8 +146,13 @@ impl<'a> Lexer<'a> {
       "continue" => TokenKind::Continue,
       "match" => TokenKind::Match,
       "struct" => TokenKind::Struct,
+      "class" => TokenKind::Class,
+      "trait" => TokenKind::Trait,
+      "extends" => TokenKind::Extends,
       "enum" => TokenKind::Enum,
       "impl" => TokenKind::Impl,
+      "mod" => TokenKind::Mod,
+      "signal" => TokenKind::Signal,
       "pub" => TokenKind::Pub,
       "true" => TokenKind::True,
       "false" => TokenKind::False,
@@ -173,14 +196,39 @@ impl<'a> Lexer<'a> {
     }
   }
 
-  fn skip_comment(&mut self) {
-    if let Some(&'#') = self.peek() {
-      while let Some(c) = self.advance() {
-        if c == '\n' {
-          break;
-        }
-      }
+  /// Consume `#` and the rest of the line. One leading space after `#` is dropped.
+  fn read_line_comment(&mut self) -> String {
+    self.advance(); // #
+    if matches!(self.peek(), Some(' ') | Some('\t')) {
+      self.advance();
     }
+    let mut text = String::new();
+    while let Some(&c) = self.peek() {
+      if c == '\n' {
+        break;
+      }
+      text.push(c);
+      self.advance();
+    }
+    text.trim_end().to_string()
+  }
+
+  /// Consume `##` and the rest of the line. One leading space after `##` is dropped.
+  fn read_doc_comment(&mut self) -> String {
+    self.advance(); // #
+    self.advance(); // #
+    if matches!(self.peek(), Some(' ') | Some('\t')) {
+      self.advance();
+    }
+    let mut text = String::new();
+    while let Some(&c) = self.peek() {
+      if c == '\n' {
+        break;
+      }
+      text.push(c);
+      self.advance();
+    }
+    text.trim_end().to_string()
   }
 
   fn read_string(&mut self, prefix: char) -> Result<String, String> {
@@ -260,9 +308,8 @@ impl<'a> Lexer<'a> {
   pub fn next_token(&mut self) -> Result<Token, String> {
     loop {
       self.current.clear();
-      let start_line = self.line;
-      let start_col = self.col;
       self.skip_whitespace();
+      self.current.clear();
       let c = match self.peek() {
         Some(&c) => c,
         None => {
@@ -274,9 +321,33 @@ impl<'a> Lexer<'a> {
         }
       };
       if c == '#' {
-        self.skip_comment();
-        continue;
+        if self.chars.clone().nth(1) == Some('#') {
+          let start_line = self.line;
+          let start_col = self.col;
+          let text = self.read_doc_comment();
+          return Ok(Token {
+            kind: TokenKind::DocComment(text),
+            text: self.current.clone(),
+            span: crate::Span {
+              line: start_line as u32,
+              col: start_col as u32,
+            },
+          });
+        }
+        let start_line = self.line;
+        let start_col = self.col;
+        let text = self.read_line_comment();
+        return Ok(Token {
+          kind: TokenKind::Comment(text),
+          text: self.current.clone(),
+          span: crate::Span {
+            line: start_line as u32,
+            col: start_col as u32,
+          },
+        });
       }
+      let start_line = self.line;
+      let start_col = self.col;
       let kind = match c {
         'f' => {
           self.advance();
@@ -387,6 +458,9 @@ impl<'a> Lexer<'a> {
           if self.peek() == Some(&'=') {
             self.advance();
             TokenKind::LtEq
+          } else if self.peek() == Some(&'<') {
+            self.advance();
+            TokenKind::Shl
           } else {
             TokenKind::Lt
           }
@@ -396,6 +470,9 @@ impl<'a> Lexer<'a> {
           if self.peek() == Some(&'=') {
             self.advance();
             TokenKind::GtEq
+          } else if self.peek() == Some(&'>') {
+            self.advance();
+            TokenKind::Shr
           } else {
             TokenKind::Gt
           }
@@ -405,8 +482,11 @@ impl<'a> Lexer<'a> {
           if self.peek() == Some(&'&') {
             self.advance();
             TokenKind::AndAnd
+          } else if self.peek() == Some(&'=') {
+            self.advance();
+            TokenKind::AmpAssign
           } else {
-            return Err(format!("unexpected '&' at {}:{}", self.line, self.col));
+            TokenKind::Amp
           }
         }
         '|' => {
@@ -414,9 +494,25 @@ impl<'a> Lexer<'a> {
           if self.peek() == Some(&'|') {
             self.advance();
             TokenKind::OrOr
+          } else if self.peek() == Some(&'=') {
+            self.advance();
+            TokenKind::PipeAssign
           } else {
-            return Err(format!("unexpected '|' at {}:{}", self.line, self.col));
+            TokenKind::Pipe
           }
+        }
+        '^' => {
+          self.advance();
+          if self.peek() == Some(&'=') {
+            self.advance();
+            TokenKind::CaretAssign
+          } else {
+            TokenKind::Caret
+          }
+        }
+        '~' => {
+          self.advance();
+          TokenKind::Tilde
         }
         '(' => {
           self.advance();
@@ -498,5 +594,58 @@ impl<'a> Lexer<'a> {
       }
     }
     Ok(tokens)
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn doc_comment_vs_line_comment() {
+    let tokens = Lexer::new("## hello\n# skipped\nfn\n")
+      .tokenize()
+      .unwrap();
+    assert!(
+      matches!(&tokens[0].kind, TokenKind::DocComment(s) if s == "hello"),
+      "{:?}",
+      tokens[0].kind
+    );
+    assert!(
+      matches!(&tokens[1].kind, TokenKind::Comment(s) if s == "skipped"),
+      "{:?}",
+      tokens[1].kind
+    );
+    assert_eq!(tokens[2].kind, TokenKind::Fn);
+  }
+
+  #[test]
+  fn doc_comment_keeps_inner_hash() {
+    let tokens = Lexer::new("## # still docs\n")
+      .tokenize()
+      .unwrap();
+    assert!(
+      matches!(&tokens[0].kind, TokenKind::DocComment(s) if s == "# still docs"),
+      "{:?}",
+      tokens[0].kind
+    );
+  }
+
+  #[test]
+  fn bitwise_tokens() {
+    let kinds: Vec<_> = Lexer::new("1 << 3 >> 1 | 2 & 4 ^ ~0 && true || false\n")
+      .tokenize()
+      .unwrap()
+      .into_iter()
+      .map(|t| t.kind)
+      .collect();
+    assert!(matches!(kinds[1], TokenKind::Shl));
+    assert!(matches!(kinds[3], TokenKind::Shr));
+    assert!(matches!(kinds[5], TokenKind::Pipe));
+    assert!(matches!(kinds[7], TokenKind::Amp));
+    assert!(matches!(kinds[9], TokenKind::Caret));
+    assert!(matches!(kinds[10], TokenKind::Tilde));
+    assert!(kinds.iter().any(|k| matches!(k, TokenKind::AndAnd)));
+    assert!(kinds.iter().any(|k| matches!(k, TokenKind::OrOr)));
   }
 }

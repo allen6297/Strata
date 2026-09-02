@@ -2,25 +2,24 @@
   "name": "rosegold",
   "displayName": "RoseGold",
   "description": "Language support for the RoseGold programming language",
-  "version": "0.3.2",
+  "version": "0.6.3",
   "publisher": "rosegold",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/allen6297/RoseGold-PY.git"
+    "url": "https://github.com/allen6297/strata.git"
   },
   "bugs": {
-    "url": "https://github.com/allen6297/RoseGold-PY/issues"
+    "url": "https://github.com/allen6297/strata/issues"
   },
-  "homepage": "https://github.com/allen6297/RoseGold-PY#readme",
+  "homepage": "https://github.com/allen6297/strata#readme",
   "engines": {
     "vscode": "^1.85.0"
   },
   "categories": [
     "Programming Languages",
     "Snippets",
-    "Testing",
-    "Formatters"
+    "Testing"
   ],
   "keywords": [
     "rosegold",
@@ -81,18 +80,6 @@
       {
         "command": "rosegold.showStatus",
         "title": "RoseGold: Show CLI Status"
-      },
-      {
-        "command": "rosegold.evalSelection",
-        "title": "RoseGold: Eval Selection"
-      }
-    ],
-    "keybindings": [
-      {
-        "command": "rosegold.evalSelection",
-        "key": "ctrl+shift+e",
-        "mac": "cmd+shift+e",
-        "when": "editorTextFocus && editorLangId == rosegold && editorHasSelection"
       }
     ],
     "menus": {
@@ -134,17 +121,6 @@
         },
         {
           "command": "rosegold.showStatus"
-        },
-        {
-          "command": "rosegold.evalSelection",
-          "when": "resourceLangId == rosegold"
-        }
-      ],
-      "editor/context": [
-        {
-          "command": "rosegold.evalSelection",
-          "when": "resourceLangId == rosegold && editorHasSelection",
-          "group": "rosegold@1"
         }
       ]
     },
@@ -189,7 +165,7 @@
         "rosegold.cliPath": {
           "type": "string",
           "default": "",
-          "description": "Optional RoseGold CLI override (e.g. /path/to/.venv/bin/rosegold or python -m rosegold). Empty = auto-detect workspace .venv."
+          "description": "Optional path to the Rust `rosegold` binary. Empty = target/debug or target/release in the workspace, then PATH."
         },
         "rosegold.diagnosticsDelayMs": {
           "type": "number",

@@ -2579,6 +2579,10 @@ dependencies = [
 [[package]]
 name = "rosegold"
 version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
 
 [[package]]
 name = "rosegold-wasm"
@@ -2589,6 +2593,7 @@ dependencies = [
  "serde",
  "serde-wasm-bindgen",
  "serde_json",
+ "strata-engine",
  "wasm-bindgen",
 ]
 

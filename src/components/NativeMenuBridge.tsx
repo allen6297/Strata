@@ -1,6 +1,8 @@
 import { useEffect, useRef } from 'react'
+import { invoke } from '@tauri-apps/api/core'
 import { useDock } from '@/components/DockProvider'
 import { listenMenuActions, type MenuAction } from '@/lib/menu'
+import { isPanelVisible } from '@/lib/dock-layout'
 import type { EntityKind, SceneMode, ToolMode } from '@/types/scene'
 import { isTauri } from '@/lib/tauri'
 
@@ -18,6 +20,7 @@ export interface AppMenuActions {
   togglePlay: () => void
   handleModeChange: (mode: SceneMode) => void
   addEntity: (kind: EntityKind) => void
+  openAddNode: () => void
   createScript: () => void
   setTool: (tool: ToolMode) => void
   setSnap: (fn: (s: boolean) => boolean) => void
@@ -31,13 +34,30 @@ export function NativeMenuBridge({
 }: {
   getActions: () => AppMenuActions
 }) {
-  const { resetLayout, togglePanel } = useDock()
+  const { resetLayout, togglePanel, layout } = useDock()
   const getActionsRef = useRef(getActions)
   getActionsRef.current = getActions
   const resetLayoutRef = useRef(resetLayout)
   resetLayoutRef.current = resetLayout
   const togglePanelRef = useRef(togglePanel)
   togglePanelRef.current = togglePanel
+
+  const hierarchyOn = isPanelVisible(layout, 'hierarchy')
+  const inspectorOn = isPanelVisible(layout, 'inspector')
+  const assetsOn = isPanelVisible(layout, 'assets')
+  const logOn = isPanelVisible(layout, 'log')
+
+  useEffect(() => {
+    if (!isTauri()) return
+    void invoke('sync_view_menu', {
+      hierarchy: hierarchyOn,
+      inspector: inspectorOn,
+      assets: assetsOn,
+      log: logOn,
+    }).catch(() => {
+      /* menu not ready yet */
+    })
+  }, [hierarchyOn, inspectorOn, assetsOn, logOn])
 
   useEffect(() => {
     if (!isTauri()) return
@@ -86,8 +106,14 @@ export function NativeMenuBridge({
           a.handleModeChange('script')
           break
         // MARK: - Insert
+        case 'add_node':
+          a.openAddNode()
+          break
         case 'add_sprite':
           a.addEntity('sprite')
+          break
+        case 'add_tilemap':
+          a.addEntity('tilemap')
           break
         case 'add_empty':
           a.addEntity('empty')
@@ -128,6 +154,9 @@ export function NativeMenuBridge({
           break
         case 'toggle_assets':
           togglePanelRef.current('assets')
+          break
+        case 'toggle_log':
+          togglePanelRef.current('log')
           break
         case 'reset_layout':
           resetLayoutRef.current()

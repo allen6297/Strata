@@ -1,35 +1,58 @@
 import type { AssetItem, Entity, EntityKind } from '@/types/scene'
+import { instantiatePrefab, findPrefabRoot } from '@/lib/prefab'
 import { entityDefaults } from '@/lib/scene'
 import { uid } from '@/lib/utils'
 import { isTauri } from '@/lib/tauri'
 
-export const DEFAULT_PLAYER_SCRIPT = `import str;
+export const DEFAULT_PLAYER_SCRIPT = `var jump_cd: Float = 0.0;
 
 fn on_ready(name: String, x: Float, y: Float): Int {
-    print("[ready] Player — arrows/WASD move, Space jump, Q destroy Coin");
-    print("strata:play_sound name=jump.wav");
-    print("strata:spawn name=Orb kind=sprite x=80 y=-20 w=24 h=24 color=#61afef script=CoinSpin.rg");
+    print("[ready] Player — arrows/WASD move, Space jump, walk into Coin, Q destroy Coin");
+    strata.play_sound("jump.wav");
+    strata.spawn({ "prefab": "Orb", "x": 80.0, "y": -20.0 });
     return 0;
 }
 
-fn on_update(name: String, x: Float, y: Float, dt: Float, keys: String): Int {
-    if str.contains(keys, "ArrowRight") || str.contains(keys, "KeyD") {
-        print("strata:move dx=3 dy=0");
+fn on_coin(amount: Int): Int {
+    print(f"[coin] {amount}");
+    strata.play_sound("jump.wav");
+    return 0;
+}
+
+fn on_enter(other: String, x: Float, y: Float): Int {
+    print(f"[enter] {other}");
+    return 0;
+}
+
+fn on_exit(other: String, x: Float, y: Float): Int {
+    print(f"[exit] {other}");
+    return 0;
+}
+
+fn on_update(name: String, x: Float, y: Float, dt: Float): Int {
+    if jump_cd > 0.0 {
+        jump_cd = jump_cd - dt;
     }
-    if str.contains(keys, "ArrowLeft") || str.contains(keys, "KeyA") {
-        print("strata:move dx=-3 dy=0");
+    if input.held("ArrowRight") || input.held("KeyD") {
+        strata.move(3.0, 0.0);
     }
-    if str.contains(keys, "ArrowUp") || str.contains(keys, "KeyW") {
-        print("strata:move dx=0 dy=-3");
+    if input.held("ArrowLeft") || input.held("KeyA") {
+        strata.move(-3.0, 0.0);
     }
-    if str.contains(keys, "ArrowDown") || str.contains(keys, "KeyS") {
-        print("strata:move dx=0 dy=3");
+    if input.held("ArrowUp") || input.held("KeyW") {
+        strata.move(0.0, -3.0);
     }
-    if str.contains(keys, "Space") {
-        print("strata:play_sound name=jump.wav");
+    if input.held("ArrowDown") || input.held("KeyS") {
+        strata.move(0.0, 3.0);
     }
-    if str.contains(keys, "KeyQ") {
-        print("strata:destroy name=Coin");
+    if input.pressed("Space") {
+        if jump_cd <= 0.0 {
+            strata.play_sound("jump.wav");
+            jump_cd = 0.25;
+        }
+    }
+    if input.pressed("KeyQ") {
+        strata.destroy("Coin");
     }
     return 0;
 }
@@ -39,13 +62,48 @@ fn main(): Int {
 }
 `
 
-export const DEFAULT_COIN_SCRIPT = `fn on_ready(name: String, x: Float, y: Float): Int {
+export const DEFAULT_COIN_SCRIPT = `## Degrees per second. Shown on the Coin Inspector card.
+@export_group("COIN")
+@export var spin: Float = 8.0;
+var frames: Int = 0;
+var popping: Bool = false;
+var pop_t: Float = 0.0;
+
+signal collected(amount: Int);
+
+fn on_ready(name: String, x: Float, y: Float): Int {
     print(f"[ready] {name}");
     return 0;
 }
 
+fn on_enter(other: String, x: Float, y: Float): Int {
+    print(f"[enter] coin/{other}");
+    collected.emit(1);
+    popping = true;
+    pop_t = 0.0;
+    strata.after(0.35, "pop");
+    return 0;
+}
+
+fn pop(): Int {
+    strata.destroy();
+    return 0;
+}
+
+fn on_destroy(): Int {
+    print("[gone] coin");
+    return 0;
+}
+
 fn on_update(name: String, x: Float, y: Float, dt: Float): Int {
-    print("strata:rot 8");
+    frames = frames + 1;
+    if popping {
+        pop_t = pop_t + dt;
+        var t = math.clamp(pop_t / 0.35, 0.0, 1.0);
+        strata.rot(math.lerp(spin, spin * 4.0, t));
+    } else {
+        strata.rot(spin);
+    }
     return 0;
 }
 
@@ -62,15 +120,23 @@ export function scriptHasHook(
   return re.test(content)
 }
 
+/** Script-tab Run: free `on_ready` or a class `on_ready` / `on_create`. */
+export function scriptHasReadyHook(content: string): boolean {
+  return scriptHasHook(content, 'on_ready') || /fn\s+on_create\s*\(/.test(content)
+}
+
 function rgFloat(n: number): string {
   if (!Number.isFinite(n)) return '0.0'
   return Number.isInteger(n) ? `${n}.0` : String(n)
 }
 
-function hookAcceptsKeys(content: string): boolean {
+function onUpdateParamCount(content: string): number {
   const m = content.match(/fn\s+on_update\s*\(([^)]*)\)/)
-  if (!m) return false
-  return m[1].includes('keys')
+  if (!m) return 0
+  return m[1]
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean).length
 }
 
 /** Strip an existing main and append a hook-driving main. */
@@ -80,6 +146,7 @@ export function buildHookProgram(
   entity: Entity,
   dt = 0.016,
   keysCsv = '',
+  pressedCsv = '',
 ): string {
   const withoutMain = scriptContent.replace(
     /fn\s+main\s*\([^)]*\)\s*:\s*\w+\s*\{[\s\S]*?\n\}/m,
@@ -90,13 +157,19 @@ export function buildHookProgram(
   const fy = rgFloat(entity.y)
   const fdt = rgFloat(dt)
   const keysLit = JSON.stringify(keysCsv)
+  const pressedLit = JSON.stringify(pressedCsv)
   let body: string
   if (hook === 'on_ready') {
     body = `    return on_ready(${nameLit}, ${fx}, ${fy});`
-  } else if (hookAcceptsKeys(scriptContent)) {
-    body = `    return on_update(${nameLit}, ${fx}, ${fy}, ${fdt}, ${keysLit});`
   } else {
-    body = `    return on_update(${nameLit}, ${fx}, ${fy}, ${fdt});`
+    const n = onUpdateParamCount(scriptContent)
+    if (n >= 6) {
+      body = `    return on_update(${nameLit}, ${fx}, ${fy}, ${fdt}, ${keysLit}, ${pressedLit});`
+    } else if (n >= 5) {
+      body = `    return on_update(${nameLit}, ${fx}, ${fy}, ${fdt}, ${keysLit});`
+    } else {
+      body = `    return on_update(${nameLit}, ${fx}, ${fy}, ${fdt});`
+    }
   }
 
   return `${withoutMain.trim()}\n\nfn main(): Int {\n${body}\n}\n`
@@ -122,6 +195,39 @@ export type RoseGoldRunResult = {
   stdout: string
   stderr: string
   message: string
+  effects?: HostEffect[]
+  hookEffects?: LabeledHostEffects[]
+}
+
+export type HostEffect =
+  | { type: 'move'; dx: number; dy: number }
+  | { type: 'rot'; degrees: number }
+  | { type: 'set'; x?: number | null; y?: number | null; rot?: number | null }
+  | {
+      type: 'spawn'
+      name: string
+      kind: string
+      x: number
+      y: number
+      width: number
+      height: number
+      color: string
+      script?: string | null
+    }
+  | {
+      type: 'spawnPrefab'
+      prefab: string
+      x?: number | null
+      y?: number | null
+    }
+  | { type: 'destroy'; name?: string | null }
+  | { type: 'playSound'; name?: string | null }
+  | { type: 'emit'; signal: string; args: Array<string | number | boolean | null> }
+  | { type: 'after'; delay: number; method: string }
+
+export type LabeledHostEffects = {
+  label: string
+  effects: HostEffect[]
 }
 
 export type HookJob = { label: string; source: string; entityId?: string }
@@ -157,6 +263,7 @@ export function collectUpdateJobs(
   scripts: AssetItem[],
   dt: number,
   keysCsv = '',
+  pressedCsv = '',
 ): HookJob[] {
   const scriptById = new Map(scripts.map((s) => [s.id, s]))
   const jobs: HookJob[] = []
@@ -168,7 +275,14 @@ export function collectUpdateJobs(
     jobs.push({
       label: `${e.name} on_update`,
       entityId: e.id,
-      source: buildHookProgram(script.content, 'on_update', e, dt, keysCsv),
+      source: buildHookProgram(
+        script.content,
+        'on_update',
+        e,
+        dt,
+        keysCsv,
+        pressedCsv,
+      ),
     })
   }
   return jobs
@@ -188,11 +302,19 @@ export function collectHookJobs(
 export type StrataDirective =
   | { type: 'move'; entityId: string; dx: number; dy: number }
   | { type: 'rot'; entityId: string; degrees: number }
-  | { type: 'set'; entityId: string; x?: number; y?: number; rot?: number }
+  | { type: 'set'; entityId: string; x?: number; y?: number; rot?: number; z?: number }
   | { type: 'spawn'; entityId: string; spec: SpawnSpec }
+  | {
+      type: 'spawnPrefab'
+      entityId: string
+      prefab: string
+      x?: number
+      y?: number
+    }
   | { type: 'destroy'; entityId: string; targetName?: string }
   | { type: 'play_sound'; assetId?: string; assetName?: string }
   | { type: 'get'; entityId: string }
+  | { type: 'after'; entityId: string; delay: number; method: string }
 
 export type SpawnSpec = {
   name: string
@@ -207,7 +329,7 @@ export type SpawnSpec = {
 }
 
 export type RuntimeSideEffect =
-  | { type: 'play_sound'; assetId?: string; assetName?: string }
+  | { type: 'play_sound'; assetId?: string; assetName?: string; url?: string }
   | { type: 'log'; message: string }
 
 export type ApplyResult = {
@@ -249,6 +371,91 @@ export function parseStrataDirectives(
   return out
 }
 
+function hostEffectsToDirectives(
+  effects: HostEffect[],
+  entityId: string,
+): StrataDirective[] {
+  const out: StrataDirective[] = []
+  for (const e of effects) {
+    if (e.type === 'move') {
+      out.push({ type: 'move', entityId, dx: e.dx, dy: e.dy })
+    } else if (e.type === 'rot') {
+      out.push({ type: 'rot', entityId, degrees: e.degrees })
+    } else if (e.type === 'set') {
+      out.push({
+        type: 'set',
+        entityId,
+        x: e.x ?? undefined,
+        y: e.y ?? undefined,
+        rot: e.rot ?? undefined,
+      })
+    } else if (e.type === 'spawn') {
+      out.push({
+        type: 'spawn',
+        entityId,
+        spec: {
+          name: e.name || 'Entity',
+          kind: (e.kind as EntityKind) || 'sprite',
+          x: e.x,
+          y: e.y,
+          width: e.width,
+          height: e.height,
+          color: e.color || '#61afef',
+          scriptName: e.script ?? undefined,
+        },
+      })
+    } else if (e.type === 'spawnPrefab') {
+      out.push({
+        type: 'spawnPrefab',
+        entityId,
+        prefab: e.prefab,
+        x: e.x ?? undefined,
+        y: e.y ?? undefined,
+      })
+    } else if (e.type === 'destroy') {
+      out.push({
+        type: 'destroy',
+        entityId,
+        targetName: e.name ?? undefined,
+      })
+    } else if (e.type === 'playSound') {
+      out.push({
+        type: 'play_sound',
+        assetName: e.name ?? undefined,
+      })
+    } else if (e.type === 'after') {
+      out.push({
+        type: 'after',
+        entityId,
+        delay: e.delay,
+        method: e.method,
+      })
+    }
+  }
+  return out
+}
+
+/** Merge stdout `strata:` lines with structured `strata.*` host effects. */
+export function collectStrataDirectives(
+  result: RoseGoldRunResult,
+  jobs: HookJob[],
+): StrataDirective[] {
+  const out = parseStrataDirectives(result.stdout, jobs)
+  const labeled = result.hookEffects ?? []
+  for (const block of labeled) {
+    const job = jobs.find((j) => j.label === block.label)
+    if (!job?.entityId) continue
+    out.push(...hostEffectsToDirectives(block.effects ?? [], job.entityId))
+  }
+  if (!labeled.length && result.effects?.length) {
+    for (const job of jobs) {
+      if (!job.entityId) continue
+      out.push(...hostEffectsToDirectives(result.effects, job.entityId))
+    }
+  }
+  return out
+}
+
 function parseDirectiveBlock(text: string, entityId: string): StrataDirective[] {
   const out: StrataDirective[] = []
   for (const line of text.split(/\r?\n/)) {
@@ -270,29 +477,41 @@ function parseDirectiveBlock(text: string, entityId: string): StrataDirective[] 
       const x = kv.x ?? payload.match(/x=(-?\d+(?:\.\d+)?)/)?.[1]
       const y = kv.y ?? payload.match(/y=(-?\d+(?:\.\d+)?)/)?.[1]
       const rot = kv.rot ?? payload.match(/rot=(-?\d+(?:\.\d+)?)/)?.[1]
+      const z = kv.z ?? payload.match(/z=(-?\d+(?:\.\d+)?)/)?.[1]
       out.push({
         type: 'set',
         entityId,
         x: x !== undefined ? Number(x) : undefined,
         y: y !== undefined ? Number(y) : undefined,
         rot: rot !== undefined ? Number(rot) : undefined,
+        z: z !== undefined ? Number(z) : undefined,
       })
     } else if (cmd === 'spawn') {
-      out.push({
-        type: 'spawn',
-        entityId,
-        spec: {
-          name: kv.name || 'Entity',
-          kind: (kv.kind as EntityKind) || 'sprite',
-          x: Number(kv.x ?? 0),
-          y: Number(kv.y ?? 0),
-          width: Number(kv.w ?? kv.width ?? 32),
-          height: Number(kv.h ?? kv.height ?? 32),
-          color: kv.color || '#61afef',
-          textureName: kv.texture,
-          scriptName: kv.script,
-        },
-      })
+      if (kv.prefab) {
+        out.push({
+          type: 'spawnPrefab',
+          entityId,
+          prefab: kv.prefab,
+          x: kv.x !== undefined ? Number(kv.x) : undefined,
+          y: kv.y !== undefined ? Number(kv.y) : undefined,
+        })
+      } else {
+        out.push({
+          type: 'spawn',
+          entityId,
+          spec: {
+            name: kv.name || 'Entity',
+            kind: (kv.kind as EntityKind) || 'sprite',
+            x: Number(kv.x ?? 0),
+            y: Number(kv.y ?? 0),
+            width: Number(kv.w ?? kv.width ?? 32),
+            height: Number(kv.h ?? kv.height ?? 32),
+            color: kv.color || '#61afef',
+            textureName: kv.texture,
+            scriptName: kv.script,
+          },
+        })
+      }
     } else if (cmd === 'destroy') {
       out.push({ type: 'destroy', entityId, targetName: kv.name })
     } else if (cmd === 'play_sound' || cmd === 'sound') {
@@ -331,9 +550,11 @@ export function previewUpdateDirectives(
   entities: Entity[],
   scripts: AssetItem[],
   keysCsv = '',
+  pressedCsv = '',
 ): StrataDirective[] {
   const scriptById = new Map(scripts.map((s) => [s.id, s]))
   const keys = keysCsv.split(',').filter(Boolean)
+  const pressed = pressedCsv.split(',').filter(Boolean)
   const out: StrataDirective[] = []
 
   for (const e of entities) {
@@ -350,10 +571,20 @@ export function previewUpdateDirectives(
       let gated = false
       let allowed = true
       for (let j = i; j >= Math.max(0, i - 4); j--) {
-        const keyMatch = lines[j].match(/str\.contains\(keys,\s*"([^"]+)"\)/)
+        const pressedMatch = lines[j].match(
+          /(?:str\.contains\(pressed,\s*"([^"]+)"\)|input\.pressed\("([^"]+)"\))/,
+        )
+        const keyMatch = lines[j].match(
+          /(?:str\.contains\(keys,\s*"([^"]+)"\)|input\.held\("([^"]+)"\))/,
+        )
+        if (pressedMatch) {
+          gated = true
+          allowed = pressed.includes(pressedMatch[1] || pressedMatch[2])
+          break
+        }
         if (keyMatch) {
           gated = true
-          allowed = keys.includes(keyMatch[1])
+          allowed = keys.includes(keyMatch[1] || keyMatch[2])
           break
         }
       }
@@ -365,7 +596,12 @@ export function previewUpdateDirectives(
       continue
     }
 
-    if (!script.content.includes('str.contains(keys,')) {
+    if (
+      !script.content.includes('str.contains(keys,') &&
+      !script.content.includes('str.contains(pressed,') &&
+      !script.content.includes('input.held(') &&
+      !script.content.includes('input.pressed(')
+    ) {
       const embedded = [...script.content.matchAll(/strata:[^"'\n]+/g)].map(
         (m) => m[0],
       )
@@ -399,6 +635,7 @@ export function applyDirectives(
   entities: Entity[],
   directives: StrataDirective[],
   assets: AssetItem[] = [],
+  prefabs: Entity[] = [],
 ): ApplyResult {
   const sideEffects: RuntimeSideEffect[] = []
   if (!directives.length) return { entities, sideEffects }
@@ -433,6 +670,9 @@ export function applyDirectives(
       if (targetId) list = list.filter((e) => e.id !== targetId)
       continue
     }
+    if (d.type === 'after') {
+      continue
+    }
     if (d.type === 'spawn') {
       const spec = d.spec
       list.push(
@@ -451,6 +691,17 @@ export function applyDirectives(
       )
       continue
     }
+    if (d.type === 'spawnPrefab') {
+      const template = findPrefabRoot(prefabs, d.prefab)
+      if (!template) continue
+      const caller = byId().get(d.entityId)
+      const x =
+        d.x !== undefined ? d.x : (caller?.x ?? 0) + template.x
+      const y =
+        d.y !== undefined ? d.y : (caller?.y ?? 0) + template.y
+      list.push(...instantiatePrefab(prefabs, template.id, x, y))
+      continue
+    }
 
     const e = byId().get(d.entityId)
     if (!e || e.locked) continue
@@ -463,6 +714,7 @@ export function applyDirectives(
       if (d.x !== undefined) e.x = d.x
       if (d.y !== undefined) e.y = d.y
       if (d.rot !== undefined) e.rotation = d.rot
+      if (d.z !== undefined) e.z = d.z
     }
   }
 
@@ -484,6 +736,41 @@ export async function runRoseGoldSource(
   try {
     const { invoke } = await import('@tauri-apps/api/core')
     return await invoke<RoseGoldRunResult>('run_rosegold', { source })
+  } catch (err) {
+    return {
+      ok: false,
+      stdout: '',
+      stderr: String(err),
+      message: err instanceof Error ? err.message : String(err),
+    }
+  }
+}
+
+export async function runRoseGoldPreview(
+  source: string,
+  name: string,
+  x: number,
+  y: number,
+  modules?: Record<string, string>,
+): Promise<RoseGoldRunResult> {
+  if (!isTauri()) {
+    return {
+      ok: false,
+      stdout: '',
+      stderr: '',
+      message:
+        'RoseGold hooks run in the desktop app (npm run tauri:dev) with `rosegold` on PATH.',
+    }
+  }
+  try {
+    const { invoke } = await import('@tauri-apps/api/core')
+    return await invoke<RoseGoldRunResult>('run_rosegold_preview', {
+      source,
+      name,
+      x,
+      y,
+      modules: modules && Object.keys(modules).length > 0 ? modules : undefined,
+    })
   } catch (err) {
     return {
       ok: false,

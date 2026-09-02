@@ -2,7 +2,7 @@
 
 A **2D/3D** custom engine with a React editor shell. Runtime lives in Rust (`crates/strata-engine`); the 2D viewport uses canvas with textures and gizmos; 3D mode uses Three.js as an **editor view only**. Desktop packaging is **Tauri 2**.
 
-Scripting language: **RoseGold** (native Rust interpreter in `crates/rosegold`). Play runs `on_ready` once, then ticks `on_update` while playing. Desktop uses the real interpreter; the browser applies the same directives from script source as a preview.
+Scripting language: **RoseGold** (native Rust interpreter in `crates/rosegold`). Play runs `on_ready` once, then ticks `on_update` while playing. Desktop and browser (after `npm run build:wasm`) use the same engine host; without WASM the browser falls back to a source-scan preview.
 
 Local path: `/Users/kalob/Code/strata`.
 
@@ -39,50 +39,48 @@ cd /Users/kalob/Code/Strata
 npm run tauri:dev
 ```
 
-Browser preview (`npm run dev`) does not run scripts; it applies Strata directives from the source as a preview.
+Browser Play (`npm run dev`) uses the same engine host when `src/wasm/rosegold` is built (`npm run build:wasm`). Without that package it falls back to a source-scan preview.
 
 ## Live Play
 
-On **Play**, Strata runs `on_ready` once, then ticks `on_update` while playing. The 2D viewport follows **Main Camera**, hides editor gizmos, and restores your edit camera when you stop. In Tauri, the Rust engine also loads the scene and ticks a `NullScriptHost` stub.
+On **Play**, Strata runs `on_ready` once, then ticks `on_update` while playing. The 2D viewport follows **Main Camera**, hides editor gizmos, and restores your edit camera when you stop. Desktop and WASM Play both tick `PlaySession` (compile once, one VM per entity).
 
 ### Input (browser preview + desktop)
 
-Add a fifth `keys` parameter to `on_update` to read held keys (comma-separated codes):
+Prefer `input.held` for movement and `input.pressed` for one-shot actions so holding a key does not retrigger them. Codes match the browser `KeyboardEvent.code` (`"Space"`, `"KeyQ"`, `"ArrowRight"`, …).
 
 ```rg
-import str;
-
-fn on_update(name: String, x: Float, y: Float, dt: Float, keys: String): Int {
-    if str.contains(keys, "ArrowRight") { print("strata:move dx=3 dy=0"); }
+fn on_update(name: String, x: Float, y: Float, dt: Float): Int {
+    if input.held("ArrowRight") { strata.move(3.0, 0.0); }
+    if input.pressed("Space") { strata.play_sound("jump.wav"); }
     return 0;
 }
 ```
 
-Arrow keys, WASD, and Space are tracked during play.
+CSV `keys` / `pressed` hook arguments still work. Arrow keys, WASD, Space, and Q are tracked during play.
 
-### Strata directives
+### Host API (`strata`)
 
-Scripts move entities and trigger runtime effects by printing directives:
+Scripts move entities and trigger runtime effects by calling `strata.*` (structured host effects). `print("strata:…")` still works for older scripts.
 
 ```rg
-print("strata:move dx=1.5 dy=0");
-print("strata:rot 8");
-print("strata:set x=0 y=10 rot=0");
-print("strata:play_sound name=jump.wav");
-print("strata:spawn name=Bullet kind=sprite x=120 y=0 w=8 h=8 color=#e5c07b");
-print("strata:destroy");
-print("strata:get");
+strata.move(1.5, 0.0);
+strata.rot(8);
+strata.set(0.0, 10.0);
+strata.play_sound("jump.wav");
+strata.spawn({ "name": "Bullet", "kind": "sprite", "x": 120.0, "y": 0.0, "w": 8.0, "h": 8.0, "color": "#e5c07b" });
+strata.destroy("Coin");
 ```
 
-| Directive | Effect |
+| Call | Effect |
 |-----------|--------|
-| `strata:move` | Nudge entity by `dx` / `dy` |
-| `strata:rot` | Add rotation degrees |
-| `strata:set` | Set `x`, `y`, `rot` |
-| `strata:play_sound` | Play audio asset (`name=` or `id=`) |
-| `strata:spawn` | Create entity (`name`, `kind`, `x`, `y`, `w`, `h`, `color`, optional `texture` / `script`) |
-| `strata:destroy` | Remove entity (or `name=Other`) |
-| `strata:get` | Log entity state to the play log |
+| `strata.move` | Nudge entity by `dx` / `dy` |
+| `strata.rot` | Add rotation degrees |
+| `strata.set` | Set `x`, `y` |
+| `strata.play_sound` | Play audio asset by name |
+| `strata.spawn` | Create entity (`name`, `kind`, `x`, `y`, `w`/`h`, `color`, optional `script`) |
+| `strata.destroy` | Remove entity by name (or this entity with no args) |
+| `strata.after` | Call a method on this entity once after a delay |
 
 ## Scene modes
 
@@ -92,7 +90,7 @@ Switch modes from the floating tab over the viewport, **Scene** menu, or keys **
 - **3D** — Three.js editor adapter with orbit camera, mesh/light entities, and euler transforms
 - **Script** — full-viewport RoseGold editor; select or double-click a `.rg` asset in the explorer to open it
 
-The dock layout is customizable: drag panel headers or tabs to rearrange zones. While dragging, edge drop targets appear so you can dock into collapsed columns. Close a panel with **×** on its header/tab, or toggle **View → Hierarchy / Inspector / Assets**. **View → Reset Layout** restores the default.
+The dock layout is customizable: drag panel headers or tabs to rearrange zones. While dragging, edge drop targets appear so you can dock into collapsed columns. Close a panel with **×** on its header/tab, or toggle **View → Hierarchy / Inspector / Files**. **View → Reset Layout** restores the default.
 
 Scenes are JSON `.scene` v2 (`mode` + 3D fields); v1 files migrate on open. Scenes are mirrored to `localStorage`; desktop **Save** / **Open** use native file dialogs.
 
@@ -102,7 +100,9 @@ Assign a texture in the Inspector, or **double-click** a texture asset. Sample i
 
 ## Project folders
 
-- **Open Project** — recursive scan for `.rg`, `.scene`, textures, audio (skips `.git` / `node_modules` / etc.)
+On launch you pick a **projects folder**. Child directories that contain `strata.json` or a `.scene` file are listed; **New project** creates a starter scene. **Continue with demo** skips the folder and uses the built-in scratch scene. Chromium can remember the folder (File System Access API); Firefox and Safari keep the same screen with demo-only entry. Desktop (Tauri) uses a real filesystem path.
+
+- **Open Project** (toolbar / File menu) — return to the project home
 - **Asset explorer** — folders, search, type filters, grid/list, refresh, keyboard nav
 - **Save Project** — writes scene + scripts (including nested `scripts/` paths)
 - Sample: `examples/demo-project/` (`textures/`, `scripts/`, `demo.scene`)

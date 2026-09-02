@@ -1,3 +1,5 @@
+import { DEFAULT_LAYER_ID } from '@/lib/draw-order'
+import { DEFAULT_TILE_SIZE, parseTiles } from '@/lib/tilemap'
 import {
   DEFAULT_COIN_SCRIPT,
   DEFAULT_PLAYER_SCRIPT,
@@ -16,6 +18,10 @@ const COLORS = ['#d4848e', '#d4a574', '#f2c8b4', '#9a5a62', '#b76e79', '#a67c52'
 
 export const DEFAULT_SCENE_NAME = 'main.scene'
 
+export const COLLISION_BIT_COUNT = 8
+export const DEFAULT_COLLISION_LAYER = 1
+export const DEFAULT_COLLISION_MASK = (1 << COLLISION_BIT_COUNT) - 1
+
 export const STATIC_ASSETS: AssetItem[] = [
   {
     id: 'a1',
@@ -29,7 +35,8 @@ export const STATIC_ASSETS: AssetItem[] = [
     id: 'a2',
     name: 'tileset.png',
     type: 'texture',
-    size: '256×256',
+    size: '64×64',
+    url: '/textures/tileset.png',
     relativePath: 'textures/tileset.png',
   },
   {
@@ -80,6 +87,25 @@ export function createDefaultScripts(): AssetItem[] {
   ]
 }
 
+export function createDefaultPrefabs(): Entity[] {
+  return [
+    entityDefaults({
+      id: 'pfb_orb',
+      name: 'Orb',
+      kind: 'sprite',
+      x: 80,
+      y: -20,
+      width: 24,
+      height: 24,
+      depth: 8,
+      color: '#61afef',
+      scriptId: 'scr_coin',
+      scriptPath: 'CoinSpin.rg',
+      textureId: 'a6',
+    }),
+  ]
+}
+
 /** @deprecated use STATIC_ASSETS + scripts */
 export const ASSETS = STATIC_ASSETS
 
@@ -109,6 +135,18 @@ export function entityDefaults(
     scriptPath: '',
     meshPrimitive: 'box',
     lightKind: 'point',
+    layerId: DEFAULT_LAYER_ID,
+    sortOrder: null,
+    solid: false,
+    collisionLayer: DEFAULT_COLLISION_LAYER,
+    collisionMask: DEFAULT_COLLISION_MASK,
+    scriptProps: {},
+    connections: [],
+    tileSize: DEFAULT_TILE_SIZE,
+    tiles: [],
+    prefabId: null,
+    prefabSourceId: null,
+    prefabOverrides: [],
     ...partial,
     rotation: rotationZ,
     rotationZ,
@@ -151,7 +189,78 @@ function parseEntity(raw: unknown, i: number): Entity {
     scriptPath: typeof e.scriptPath === 'string' ? e.scriptPath : '',
     meshPrimitive: e.meshPrimitive === 'plane' ? 'plane' : 'box',
     lightKind: e.lightKind === 'directional' ? 'directional' : 'point',
+    layerId:
+      typeof e.layerId === 'string' && e.layerId.trim()
+        ? e.layerId
+        : DEFAULT_LAYER_ID,
+    sortOrder:
+      e.sortOrder == null || Number.isNaN(Number(e.sortOrder))
+        ? null
+        : Number(e.sortOrder),
+    solid: Boolean(e.solid),
+    collisionLayer: collisionBits(e.collisionLayer, DEFAULT_COLLISION_LAYER),
+    collisionMask: collisionBits(e.collisionMask, DEFAULT_COLLISION_MASK),
+    scriptProps: parseScriptProps((e as { scriptProps?: unknown }).scriptProps),
+    connections: parseConnections((e as { connections?: unknown }).connections),
+    tileSize: Math.max(1, Number((e as { tileSize?: unknown }).tileSize) || DEFAULT_TILE_SIZE),
+    tiles: parseTiles((e as { tiles?: unknown }).tiles),
+    prefabId: parsePrefabLink((e as { prefabId?: unknown }).prefabId),
+    prefabSourceId: parsePrefabLink((e as { prefabSourceId?: unknown }).prefabSourceId),
+    prefabOverrides: parsePrefabOverrides(
+      (e as { prefabOverrides?: unknown }).prefabOverrides,
+    ),
   })
+}
+
+function parsePrefabLink(raw: unknown): string | null {
+  return typeof raw === 'string' && raw.trim() ? raw : null
+}
+
+function parsePrefabOverrides(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return []
+  const out: string[] = []
+  const seen = new Set<string>()
+  for (const item of raw) {
+    if (typeof item !== 'string' || !item || seen.has(item)) continue
+    seen.add(item)
+    out.push(item)
+  }
+  return out
+}
+
+function collisionBits(raw: unknown, fallback: number): number {
+  const n = Number(raw)
+  if (!Number.isFinite(n) || n < 0) return fallback
+  return n >>> 0
+}
+
+function parseScriptProps(
+  raw: unknown,
+): Record<string, string | number | boolean> {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {}
+  const out: Record<string, string | number | boolean> = {}
+  for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+    if (typeof value === 'string' || typeof value === 'boolean') {
+      out[key] = value
+    } else if (typeof value === 'number' && Number.isFinite(value)) {
+      out[key] = value
+    }
+  }
+  return out
+}
+
+function parseConnections(raw: unknown): Entity['connections'] {
+  if (!Array.isArray(raw)) return []
+  const out: Entity['connections'] = []
+  for (const item of raw) {
+    if (!item || typeof item !== 'object') continue
+    const c = item as { signal?: unknown; to?: unknown; method?: unknown }
+    if (typeof c.signal !== 'string' || !c.signal.trim()) continue
+    if (typeof c.to !== 'string' || !c.to.trim()) continue
+    if (typeof c.method !== 'string' || !c.method.trim()) continue
+    out.push({ signal: c.signal, to: c.to, method: c.method })
+  }
+  return out
 }
 
 export function createDefaultEntities(): Entity[] {
@@ -167,33 +276,70 @@ export function createDefaultEntities(): Entity[] {
       height: 64,
       depth: 8,
       color: '#d4848e',
+      solid: true,
     }),
     entityDefaults({
-      id: 'ent_platform',
-      name: 'Platform',
-      kind: 'sprite',
-      x: 40,
-      y: 120,
-      width: 220,
-      height: 28,
+      id: 'ent_ground',
+      name: 'Ground',
+      kind: 'tilemap',
+      textureId: 'a2',
+      x: -64,
+      y: 28,
+      width: 256,
+      height: 16,
       depth: 8,
       color: '#8b6b5c',
+      solid: true,
+      tileSize: 16,
+      tiles: Array.from({ length: 16 }, (_, x) => ({ x, y: 0, i: 0 })),
     }),
     entityDefaults({
       id: 'ent_coin',
       name: 'Coin',
       kind: 'sprite',
-      parentId: 'ent_player',
       scriptId: 'scr_coin',
       textureId: 'a6',
-      x: -90,
-      y: -40,
+      x: 140,
+      y: 0,
       width: 28,
       height: 28,
       depth: 8,
       rotation: 15,
       rotationZ: 15,
       color: '#d4a574',
+      connections: [
+        { signal: 'collected', to: 'ent_player', method: 'on_coin' },
+      ],
+    }),
+    entityDefaults({
+      id: 'ent_coin_fast',
+      name: 'Coin Fast',
+      kind: 'sprite',
+      scriptId: 'scr_coin',
+      textureId: 'a6',
+      x: 180,
+      y: 0,
+      width: 28,
+      height: 28,
+      depth: 8,
+      rotation: 15,
+      rotationZ: 15,
+      color: '#d4a574',
+      scriptProps: { spin: 20 },
+      connections: [
+        { signal: 'collected', to: 'ent_player', method: 'on_coin' },
+      ],
+    }),
+    entityDefaults({
+      id: 'ent_star',
+      name: 'Star',
+      kind: 'sprite',
+      x: 40,
+      y: 0,
+      width: 24,
+      height: 24,
+      depth: 8,
+      color: '#e8c48a',
     }),
     entityDefaults({
       id: 'ent_main_cam',
@@ -289,6 +435,16 @@ export function createEntity(kind: EntityKind, index: number): Entity {
                   scriptPath: 'scripts/main.rg',
                   color: '#9a5a62',
                 }
+              : kind === 'tilemap'
+                ? {
+                    width: 256,
+                    height: 128,
+                    depth: 8,
+                    color: '#8b6b5c',
+                    solid: true,
+                    tileSize: DEFAULT_TILE_SIZE,
+                    tiles: [],
+                  }
               : {
                   width: 48,
                   height: 48,
@@ -413,12 +569,19 @@ export function toSceneDocument(
   entities: Entity[],
   scripts: AssetItem[] = [],
   mode: SceneMode = '2d',
+  prefabs: Entity[] = [],
 ): SceneDocument {
+  const withPath = (e: Entity): Entity => {
+    if (e.scriptPath) return e
+    const s = scripts.find((s) => s.id === e.scriptId)
+    return s?.name ? { ...e, scriptPath: s.name } : e
+  }
   return {
     version: 2,
     name,
     mode,
-    entities,
+    entities: entities.map(withPath),
+    prefabs: prefabs.map(withPath),
     scripts: scripts.filter((s) => s.type === 'script'),
   }
 }
@@ -432,12 +595,16 @@ export function parseSceneDocument(data: unknown): SceneDocument {
     name?: string
     mode?: SceneMode
     entities?: unknown[]
+    prefabs?: unknown[]
     scripts?: AssetItem[]
   }
   if (!Array.isArray(doc.entities) || (doc.version !== 1 && doc.version !== 2)) {
     throw new Error('Unsupported or invalid Strata scene')
   }
   const entities = doc.entities.map((raw, i) => parseEntity(raw, i))
+  const prefabs = Array.isArray(doc.prefabs)
+    ? doc.prefabs.map((raw, i) => parseEntity(raw, i))
+    : []
   const scripts = Array.isArray(doc.scripts)
     ? doc.scripts
         .filter((s) => s && s.type === 'script')
@@ -463,6 +630,7 @@ export function parseSceneDocument(data: unknown): SceneDocument {
             ? 'script'
             : '2d',
     entities,
+    prefabs,
     scripts,
   }
 }

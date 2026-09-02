@@ -4,6 +4,41 @@ description = "Run RoseGold script source in a temp file."
 commands.allow = ["run_rosegold"]
 
 [[permission]]
+identifier = "allow-run-rosegold-preview"
+description = "Run a script's on_ready / on_create (class method or free function)."
+commands.allow = ["run_rosegold_preview"]
+
+[[permission]]
+identifier = "allow-check-rosegold"
+description = "Typecheck RoseGold source without evaluating."
+commands.allow = ["check_rosegold"]
+
+[[permission]]
+identifier = "allow-def-rosegold"
+description = "Resolve go-to-def / hover at a source position."
+commands.allow = ["def_rosegold", "hover_rosegold"]
+
+[[permission]]
+identifier = "allow-list-rosegold-exports"
+description = "List @export var fields from RoseGold source without evaluating."
+commands.allow = ["list_rosegold_exports"]
+
+[[permission]]
+identifier = "allow-list-rosegold-signals"
+description = "List signal declarations and top-level functions from RoseGold source."
+commands.allow = ["list_rosegold_signals", "list_rosegold_fns"]
+
+[[permission]]
+identifier = "allow-list-rosegold-nodes"
+description = "List @node classes from RoseGold source without evaluating."
+commands.allow = ["list_rosegold_nodes"]
+
+[[permission]]
+identifier = "allow-stdlib-rosegold"
+description = "Read crate-embedded RoseGold stdlib source for go-to-def."
+commands.allow = ["stdlib_rosegold"]
+
+[[permission]]
 identifier = "allow-run-rosegold-hooks"
 description = "Run RoseGold on_ready/on_update hook jobs."
 commands.allow = ["run_rosegold_hooks"]
@@ -14,9 +49,24 @@ description = "Scan a project directory for assets and scripts."
 commands.allow = ["list_project_files"]
 
 [[permission]]
+identifier = "allow-list-project-entries"
+description = "List project folders inside a projects root."
+commands.allow = ["list_project_entries"]
+
+[[permission]]
+identifier = "allow-create-project-folder"
+description = "Create a new project folder with a starter scene."
+commands.allow = ["create_project_folder"]
+
+[[permission]]
+identifier = "allow-create-project-dir"
+description = "Create a directory inside the open project."
+commands.allow = ["create_project_dir"]
+
+[[permission]]
 identifier = "allow-write-project-file"
-description = "Write a text file into the open project folder."
-commands.allow = ["write_project_file"]
+description = "Write a text or binary file into the open project folder."
+commands.allow = ["write_project_file", "write_project_file_base64"]
 
 [[permission]]
 identifier = "allow-read-text-file"
@@ -27,6 +77,26 @@ commands.allow = ["read_text_file"]
 identifier = "allow-read-file-base64"
 description = "Read a binary file and return base64."
 commands.allow = ["read_file_base64"]
+
+[[permission]]
+identifier = "allow-engine-set-scripts"
+description = "Bind entity scripts and the script library for play."
+commands.allow = ["engine_set_scripts"]
+
+[[permission]]
+identifier = "allow-engine-set-audio"
+description = "Register named audio clips for strata.play_sound."
+commands.allow = ["engine_set_audio"]
+
+[[permission]]
+identifier = "allow-engine-set-keys"
+description = "Forward held and just-pressed keys into the play session."
+commands.allow = ["engine_set_keys"]
+
+[[permission]]
+identifier = "allow-engine-clear-play"
+description = "Reset the play session on Stop."
+commands.allow = ["engine_clear_play"]
 
 [[permission]]
 identifier = "allow-engine-info"
@@ -47,3 +117,8 @@ commands.allow = ["engine_snapshot"]
 identifier = "allow-engine-tick"
 description = "Tick the Rust engine simulation."
 commands.allow = ["engine_tick"]
+
+[[permission]]
+identifier = "allow-sync-view-menu"
+description = "Sync View menu checkboxes with dock panel visibility."
+commands.allow = ["sync_view_menu"]

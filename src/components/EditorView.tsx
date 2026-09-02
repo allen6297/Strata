@@ -110,8 +110,6 @@ export function EditorView({
     let dragId: string | null = null
     let dragOffset = new THREE.Vector3()
     let lastHud = ''
-    let playTime = 0
-    let last = performance.now()
     let pan2d = { x: 0, y: 0, zoom: 1 }
     let panning = false
     let panStart = { x: 0, y: 0, cx: 0, cy: 0 }
@@ -213,7 +211,6 @@ export function EditorView({
           objects.delete(id)
         }
       }
-      const t = playTime
       // Parents first so children attach to existing pivots
       const ordered = [...list].sort((a, b) => {
         const depth = (e: Entity) => {
@@ -241,11 +238,7 @@ export function EditorView({
           parentObj.add(obj)
         }
         obj.visible = e.visible
-        const bob =
-          playingRef.current && (e.kind === 'sprite' || e.kind === 'mesh')
-            ? Math.sin(t * 3 + e.x * 0.01) * 4
-            : 0
-        obj.position.set(e.x, e.y + bob, modeRef.current === '3d' ? e.z : 0)
+        obj.position.set(e.x, e.y, modeRef.current === '3d' ? e.z : 0)
         obj.rotation.set(
           THREE.MathUtils.degToRad(e.rotationX),
           THREE.MathUtils.degToRad(e.rotationY),
@@ -391,10 +384,7 @@ export function EditorView({
       }
     }
 
-    const draw = (now: number) => {
-      const dt = (now - last) / 1000
-      last = now
-      if (playingRef.current) playTime += dt
+    const draw = () => {
       applyTheme()
       const is3d = modeRef.current === '3d'
       grid2d.visible = !is3d

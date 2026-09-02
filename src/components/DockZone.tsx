@@ -58,7 +58,7 @@ function DockTab({
   )
 
   const onTabPointerDown = useCallback(
-    (e: ReactPointerEvent<HTMLButtonElement>) => {
+    (e: ReactPointerEvent<HTMLDivElement>) => {
       if (e.button !== 0) return
       dragStart.current = { x: e.clientX, y: e.clientY, panelId }
       e.currentTarget.setPointerCapture(e.pointerId)
@@ -67,7 +67,7 @@ function DockTab({
   )
 
   const onTabPointerMove = useCallback(
-    (e: ReactPointerEvent<HTMLButtonElement>) => {
+    (e: ReactPointerEvent<HTMLDivElement>) => {
       const start = dragStart.current
       if (!start) return
       const dx = e.clientX - start.x
@@ -85,7 +85,7 @@ function DockTab({
   )
 
   const clearTabDrag = useCallback(
-    (e: ReactPointerEvent<HTMLButtonElement>) => {
+    (e: ReactPointerEvent<HTMLDivElement>) => {
       const start = dragStart.current
       dragStart.current = null
       try {
@@ -105,16 +105,16 @@ function DockTab({
     drag.panelId !== panelId
 
   return (
-    <button
-      type="button"
+    <div
       role="tab"
+      tabIndex={0}
       aria-selected={selected}
       data-testid={`dock-tab-${panelId}`}
       className={cn(
-        'dock-tab relative flex max-w-[9rem] cursor-grab items-center gap-1 rounded-t px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.06em] active:cursor-grabbing',
+        'dock-tab relative flex h-full max-w-[8rem] cursor-grab items-center gap-0.5 border-b-2 px-2 text-[10px] font-semibold uppercase tracking-[0.08em] active:cursor-grabbing',
         selected
-          ? 'bg-[var(--bg-input)] text-[var(--text)]'
-          : 'text-[var(--text-muted)] hover:bg-[var(--bg-panel-raised)] hover:text-[var(--text)]',
+          ? 'border-b-[var(--accent)] text-[var(--text)]'
+          : 'border-b-transparent text-[var(--text-muted)] hover:bg-[var(--bg-panel-raised)] hover:text-[var(--text)]',
         drag?.panelId === panelId && 'opacity-50',
         isDropBefore &&
           'before:absolute before:-left-0.5 before:top-1 before:bottom-1 before:w-0.5 before:rounded-full before:bg-[var(--accent)]',
@@ -123,6 +123,12 @@ function DockTab({
       onPointerMove={onTabPointerMove}
       onPointerUp={clearTabDrag}
       onPointerCancel={clearTabDrag}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault()
+          setActive(zone, panelId)
+        }
+      }}
       onPointerEnter={() => {
         if (drag) {
           setDropTarget(zone)
@@ -130,9 +136,9 @@ function DockTab({
         }
       }}
     >
-      <span className="truncate">{PANEL_LABELS[panelId]}</span>
-      <DockPanelClose panelId={panelId} className="ml-0.5 h-4 w-4" />
-    </button>
+      <span className="min-w-0 truncate">{PANEL_LABELS[panelId]}</span>
+      <DockPanelClose panelId={panelId} className="h-4 w-4" />
+    </div>
   )
 }
 
@@ -227,7 +233,7 @@ export function DockZone({
     <div className={cn('flex min-h-0 min-w-0 flex-col bg-[var(--bg-panel)]', className)}>
       {tabbed && (
         <div
-          className="flex h-7 shrink-0 items-end gap-0.5 border-b border-[var(--border)] bg-[var(--bg-panel)] px-1 pt-1"
+          className="flex h-8 shrink-0 items-center gap-1 border-b border-[var(--border)] bg-[var(--bg-panel)] px-2"
           role="tablist"
         >
           {panels.map((panelId, index) => (

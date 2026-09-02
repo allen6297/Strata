@@ -1,0 +1,5 @@
+{
+  "renderLayers": [
+    { "id": "layer_default", "name": "Default", "order": 0 }
+  ]
+}
