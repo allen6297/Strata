@@ -295,7 +295,7 @@ class Vec3 extends Vec2 impl HasLength {
 
 `impl HasLength for Vec2 { … }` at module scope still works. Nested `impl HasLength { … }` in the class body still works. Trait methods are callable on the instance (`v.length()`).
 
-A crate `Vec2` (same shape) is always available from `stdlib/vec.rg`.
+A crate `Vec2` / `Vec3` (same shape) is always available from `stdlib/vec.rg`.
 
 `@node class MyNode extends Sprite` marks a scene node. Import the base first (`import strata.Sprite;` or `import strata.Node;`). Bases (`Node`, `Empty`, `Sprite`, `Tilemap`, `Camera`, `Mesh`, `Light`) live in `stdlib/node.rg` (`name`, `x`, `y`, `z`, plus empty `on_create` / `on_update` / `on_destroy` / `on_enter` / `on_exit`). Play constructs the class and calls those methods. `@export var` / `@export_group` on class fields show in the Inspector (same as module-level `@export var`). Free-function `on_ready` / `on_update` scripts still work. One `@node` class per file.
 
@@ -411,14 +411,14 @@ runtime error at 3:12: division by zero
 | `checks` | Assertion helpers (`that`, `eq`, …) |
 | `option` / `Option` | `Some`, `None`; methods `is_some`, `is_none`, `unwrap`, `unwrap_or`. `None` is falsy in `if` |
 | `result` / `Result` | `Ok`, `Err`; methods `is_ok`, `is_err`, `unwrap`, `unwrap_or`. `Err` is falsy in `if`; unit enums like `Color.Red` are truthy |
-| `vec` / `Vec2` | `class Vec2` with `length` / `add` (always in scope, like `Option`) |
+| `vec` / `Vec2` / `Vec3` | `class Vec2` / `class Vec3 extends Vec2` with `length` / `add` (always in scope, like `Option`) |
 | `node` | `Node` / `Empty` / `Sprite` / … — `import strata.Sprite;` then `@node class Foo extends Sprite` |
-| `io` | `read_text(path)`, `write_text(path, content)` |
+| `io` | `read_text(path)`, `read_lines(path)`, `write_text(path, content)`, `append_text(path, content)`, `remove(path)`, `exists(path)` — all file ops except `exists` return `Result` |
 | `input` | `pressed(code)`, `held(code)` — KeyboardEvent codes (`"Space"`, `"KeyQ"`, `"ArrowRight"`, …) |
 | `strata` | `move(dx, dy)`, `rot(deg)`, `set(x, y)`, `spawn(name | {…})`, `destroy(name)`, `play_sound(name)`, `after(delay, method)`, `find(name?)` |
 
 Builtins (no import): `print`, `len`, `assert`, `Array(...)`, `Map(...)`.
-Prelude types (no import): `Option`, `Result`, `Vec2`.
+Prelude types (no import): `Option`, `Result`, `Vec2`, `Vec3`.
 
 Host and crate modules **must be imported** (`import math;`, `import strata;`, `import input;`, `import str;`). Node bases: `import strata.Sprite;` (or `Node`, `Empty`, …).
 

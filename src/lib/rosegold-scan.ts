@@ -64,11 +64,14 @@ export type ScanTrait = {
   signals: ScanMember[]
 }
 
+export type TypedLocal = { name: string; typeName: string }
+
 export type ScanFile = {
   symbols: ScanSymbol[]
   classes: ScanClass[]
   traits: ScanTrait[]
   signals: ScanMember[]
+  typedLocals: TypedLocal[]
 }
 
 function maskNoise(src: string): string {
@@ -165,6 +168,42 @@ function parseExtends(header: string): string | null {
   return m?.[1] ?? null
 }
 
+/** Nested `impl Trait { … }` inside a class (not `impl Trait for Type`). */
+function parseNestedImpls(masked: string, start: number, end: number): string[] {
+  const slice = masked.slice(start, end)
+  const re =
+    /(?:^|[^A-Za-z0-9_])impl\s+([A-Za-z_]\w*)(\s+for\s+[A-Za-z_]\w*)?\s*\{/g
+  const out: string[] = []
+  let m: RegExpExecArray | null
+  while ((m = re.exec(slice))) {
+    if (m[2]) continue
+    out.push(m[1]!)
+  }
+  return out
+}
+
+function scanTypedLocals(masked: string): TypedLocal[] {
+  const out: TypedLocal[] = []
+  const seen = new Set<string>()
+  const push = (name: string, typeName: string) => {
+    if (seen.has(name)) return
+    seen.add(name)
+    out.push({ name, typeName })
+  }
+  const annotated =
+    /(?:^|[^A-Za-z0-9_])(?:pub\s+)?(?:var|const)\s+([A-Za-z_]\w*)\s*:\s*([A-Za-z_]\w*)/g
+  let m: RegExpExecArray | null
+  while ((m = annotated.exec(masked))) {
+    push(m[1]!, m[2]!)
+  }
+  const inferred =
+    /(?:^|[^A-Za-z0-9_])(?:pub\s+)?(?:var|const)\s+([A-Za-z_]\w*)\s*=\s*([A-Za-z_]\w*)\s*\{/g
+  while ((m = inferred.exec(masked))) {
+    push(m[1]!, m[2]!)
+  }
+  return out
+}
+
 function insideAny(
   pos: number,
   ranges: Array<{ bodyFrom: number; bodyTo: number }>,
@@ -214,7 +253,10 @@ export function scanSource(src: string): ScanFile {
       bodyFrom: body.start,
       bodyTo: body.end,
       extendsName,
-      impls: parseImpls(header),
+      impls: unique([
+        ...parseImpls(header),
+        ...parseNestedImpls(masked, body.start, body.end),
+      ]),
       isNode:
         prevNonemptyLine(masked, nameFrom) === '@node' ||
         (extendsName != null && (NODE_BASES as readonly string[]).includes(extendsName)),
@@ -300,7 +342,13 @@ export function scanSource(src: string): ScanFile {
     ...traits.flatMap((t) => t.signals),
   ]
 
-  return { symbols, classes, traits, signals }
+  return {
+    symbols,
+    classes,
+    traits,
+    signals,
+    typedLocals: scanTypedLocals(masked),
+  }
 }
 
 export function mergeFiles(sources: Record<string, string>): ScanFile[] {
@@ -420,4 +468,62 @@ export function isSignalName(file: ScanFile, files: ScanFile[], name: string): b
     }
   }
   return false
+}
+
+export function typeOfLocal(file: ScanFile, name: string): string | undefined {
+  return file.typedLocals.find((t) => t.name === name)?.typeName
+}
+
+export type MemberRole = 'field' | 'method' | 'signal' | 'super' | 'emit'
+
+export type MemberItem = { name: string; role: MemberRole }
+
+export type ReceiverMembers =
+  | { kind: 'list'; items: MemberItem[] }
+  | { kind: 'catalog' }
+
+function itemsFromMembers(mem: ClassMembers): MemberItem[] {
+  return [
+    ...mem.fields.map((name) => ({ name, role: 'field' as const })),
+    ...mem.methods.map((name) => ({ name, role: 'method' as const })),
+    ...mem.signals.map((name) => ({ name, role: 'signal' as const })),
+  ]
+}
+
+/** Completions after `receiver.` — self / super / signal / typed local, else catalog. */
+export function membersFor(
+  file: ScanFile,
+  files: ScanFile[],
+  pos: number,
+  receiver: string,
+): ReceiverMembers {
+  const enclosing = classAt(file, pos)
+  if (receiver === 'self') {
+    if (!enclosing) return { kind: 'list', items: [] }
+    return { kind: 'list', items: itemsFromMembers(classMembers(enclosing, files)) }
+  }
+  if (receiver === 'super') {
+    if (!enclosing) return { kind: 'list', items: [] }
+    return {
+      kind: 'list',
+      items: parentMethods(enclosing, files).map((name) => ({
+        name,
+        role: 'super' as const,
+      })),
+    }
+  }
+  const fromClass = enclosing
+    ? classMembers(enclosing, files).signals.includes(receiver)
+    : false
+  if (fromClass || isSignalName(file, files, receiver)) {
+    return { kind: 'list', items: [{ name: 'emit', role: 'emit' }] }
+  }
+  const typeName = typeOfLocal(file, receiver)
+  if (typeName) {
+    const cls = findClass(files, typeName)
+    if (cls) {
+      return { kind: 'list', items: itemsFromMembers(classMembers(cls, files)) }
+    }
+  }
+  return { kind: 'catalog' }
 }

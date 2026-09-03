@@ -1,9 +1,10 @@
 # Project Status — Strata
 
-Snapshot: **Wednesday, Sep 2, 2026**
+Snapshot: **Thursday, Sep 3, 2026**
 
 ## Done recently
 
+- SE8: language-aware autocomplete (`self.` / `super.` / `extends` / `impl` / trait signals / `@node` hooks); in-app and VS Code stay in lockstep
 - RoseGold eval/tooling: `&&` / `||` short-circuit; `n // 0` is a runtime error; `Result.Err` / `Option.None` are falsy; unknown struct fields error; `"é".len` is characters; imported trait signals and class methods show in Inspector; `@test` resolves sibling modules; `fmt` keeps `#` comments
 - Project home: choose a projects folder, list child projects, create a new one, or continue with the demo. Chromium web uses the File System Access API; Firefox/Safari keep the same screen with demo-only entry.
 

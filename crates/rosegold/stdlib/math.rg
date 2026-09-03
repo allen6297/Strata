@@ -2,7 +2,7 @@
 # (`__math.*`). The rest is RoseGold. Bodies must not call sibling fns —
 # they run in the caller's VM, not this module.
 
-mod math {
+pub mod math {
     pub fn sin(n: Float): Float {
         return __math.sin(n);
     }

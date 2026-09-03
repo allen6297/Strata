@@ -57,6 +57,7 @@ const TYPES = [
   "Option",
   "Result",
   "Vec2",
+  "Vec3",
   "Node",
   "Empty",
   "Sprite",
@@ -407,21 +408,19 @@ function scanOpenFiles(document) {
 function afterDotCompletions(mod, document, position) {
   const files = scanOpenFiles(document);
   const file = files[0];
-  const enclosing = scan.classAt(file, document.offsetAt(position));
-  if (mod === "self") {
-    if (!enclosing) return [];
-    const mem = scan.classMembers(enclosing, files);
-    return [
-      ...mem.fields.map((n) => nameItem(n, vscode.CompletionItemKind.Field, "field")),
-      ...mem.methods.map((n) => nameItem(n, vscode.CompletionItemKind.Method, "method")),
-      ...mem.signals.map((n) => nameItem(n, vscode.CompletionItemKind.Event, "signal")),
-    ];
-  }
-  if (mod === "super") {
-    if (!enclosing) return [];
-    return scan
-      .parentMethods(enclosing, files)
-      .map((n) => nameItem(n, vscode.CompletionItemKind.Method, "super"));
+  const offset = document.offsetAt(position);
+  const hit = scan.membersFor(file, files, offset, mod);
+  if (hit.kind === "list") {
+    return hit.items.map((item) => {
+      if (item.role === "emit") return emitAfterDot();
+      const kind =
+        item.role === "field"
+          ? vscode.CompletionItemKind.Field
+          : item.role === "signal"
+            ? vscode.CompletionItemKind.Event
+            : vscode.CompletionItemKind.Method;
+      return nameItem(item.name, kind, item.role === "super" ? "super" : item.role);
+    });
   }
   const items = memberCompletions(mod);
   if (items.length) return items;
@@ -431,23 +430,26 @@ function afterDotCompletions(mod, document, position) {
 function localCompletions(document) {
   const items = [];
   const seen = new Set();
-  for (const sym of documentSymbols(document)) {
+  const file = scan.scanSource(document.getText());
+  const kindOf = {
+    fn: vscode.CompletionItemKind.Function,
+    var: vscode.CompletionItemKind.Variable,
+    const: vscode.CompletionItemKind.Constant,
+    struct: vscode.CompletionItemKind.Struct,
+    enum: vscode.CompletionItemKind.Enum,
+    class: vscode.CompletionItemKind.Class,
+    trait: vscode.CompletionItemKind.Interface,
+    mod: vscode.CompletionItemKind.Module,
+    signal: vscode.CompletionItemKind.Event,
+  };
+  for (const sym of file.symbols) {
     if (seen.has(sym.name)) continue;
     seen.add(sym.name);
-    const item = new vscode.CompletionItem(sym.name, vscode.CompletionItemKind.Variable);
-    if (sym.kind === vscode.SymbolKind.Function) {
-      item.kind = vscode.CompletionItemKind.Function;
-    } else if (
-      sym.kind === vscode.SymbolKind.Struct ||
-      sym.kind === vscode.SymbolKind.Enum
-    ) {
-      item.kind = vscode.CompletionItemKind.TypeParameter;
-    } else if (sym.kind === vscode.SymbolKind.Class) {
-      item.kind = vscode.CompletionItemKind.Class;
-    } else if (sym.kind === vscode.SymbolKind.Event) {
-      item.kind = vscode.CompletionItemKind.Event;
-    }
-    item.detail = "in file";
+    const item = new vscode.CompletionItem(
+      sym.name,
+      kindOf[sym.kind] || vscode.CompletionItemKind.Variable,
+    );
+    item.detail = sym.kind === "fn" ? "in file" : sym.kind;
     items.push(item);
   }
   return items;
@@ -623,6 +625,9 @@ function provideCompletions(document, position) {
     for (const n of mem.methods) {
       items.push(nameItem(n, vscode.CompletionItemKind.Method, "method"));
     }
+    for (const n of mem.signals) {
+      items.push(nameItem(n, vscode.CompletionItemKind.Event, "signal"));
+    }
   }
   return items;
 }
@@ -752,6 +757,8 @@ function documentSymbols(doc) {
     { re: /^[ \t]*(?:pub[ \t]+)?impl[ \t]+([A-Za-z_][A-Za-z0-9_]*)/gm, kind: vscode.SymbolKind.Class },
     { re: /^[ \t]*(?:pub[ \t]+)?enum[ \t]+([A-Za-z_][A-Za-z0-9_]*)/gm, kind: vscode.SymbolKind.Enum },
     { re: /^[ \t]*(?:pub[ \t]+)?signal[ \t]+([A-Za-z_][A-Za-z0-9_]*)/gm, kind: vscode.SymbolKind.Event },
+    { re: /^[ \t]*(?:pub[ \t]+)?mod[ \t]+([A-Za-z_][A-Za-z0-9_]*)/gm, kind: vscode.SymbolKind.Namespace },
+    { re: /^[ \t]*(?:pub[ \t]+)?const[ \t]+([A-Za-z_][A-Za-z0-9_]*)/gm, kind: vscode.SymbolKind.Constant },
     { re: /^[ \t]*@export(?:_group)?[ \t]+var[ \t]+([A-Za-z_][A-Za-z0-9_]*)/gm, kind: vscode.SymbolKind.Property },
     { re: /^[ \t]*var[ \t]+([A-Za-z_][A-Za-z0-9_]*)/gm, kind: vscode.SymbolKind.Variable },
   ];

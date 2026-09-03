@@ -1,6 +1,6 @@
 # Public Result type. Ok/Err constructors stay language-native.
 
-mod result {
+pub mod result {
     pub enum Result<T, E> {
         Ok(T),
         Err(E),

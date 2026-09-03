@@ -1,10 +1,10 @@
 # Scene node types. `import strata.Sprite;` (or Node / Empty / …) before `extends Sprite`.
 # Play does not preload these; the import loads this module.
 
-mod strata {
+pub mod strata {
 ## Transform only. Parent other nodes. Same kind as Empty.
 ## Override `on_create` / `on_update` / `on_destroy` / `on_enter` / `on_exit` in an `@node` class.
-class Node {
+pub class Node {
     var name: String = "";
     var x: Float = 0.0;
     var y: Float = 0.0;
@@ -37,26 +37,26 @@ class Node {
 }
 
 ## Transform only. Parent other nodes.
-class Empty extends Node {
+pub class Empty extends Node {
 }
 
 ## Textured quad. Draw and collide.
-class Sprite extends Node {
+pub class Sprite extends Node {
 }
 
 ## Paint a grid. Solid cells are walls.
-class Tilemap extends Node {
+pub class Tilemap extends Node {
 }
 
 ## Play follow and view frustum.
-class Camera extends Node {
+pub class Camera extends Node {
 }
 
 ## 3D primitive in the editor viewport.
-class Mesh extends Node {
+pub class Mesh extends Node {
 }
 
 ## 3D light in the editor viewport.
-class Light extends Node {
+pub class Light extends Node {
 }
 }

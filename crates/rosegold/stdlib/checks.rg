@@ -1,6 +1,6 @@
 # Assertion helpers for `@test`. Pure RoseGold on top of `assert`.
 
-mod checks {
+pub mod checks {
     pub fn that(value: Bool) {
         assert(value);
     }

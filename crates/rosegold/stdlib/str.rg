@@ -1,6 +1,6 @@
 # Public string API. Search / case / trim stay native primitives (`__str.*`).
 
-mod str {
+pub mod str {
     pub fn contains(s: String, sub: String): Bool {
         return __str.contains(s, sub);
     }

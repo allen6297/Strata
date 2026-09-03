@@ -94,6 +94,41 @@ function parseExtends(header) {
   return m ? m[1] : null;
 }
 
+function parseNestedImpls(masked, start, end) {
+  const slice = masked.slice(start, end);
+  const re =
+    /(?:^|[^A-Za-z0-9_])impl\s+([A-Za-z_]\w*)(\s+for\s+[A-Za-z_]\w*)?\s*\{/g;
+  const out = [];
+  let m;
+  while ((m = re.exec(slice))) {
+    if (m[2]) continue;
+    out.push(m[1]);
+  }
+  return out;
+}
+
+function scanTypedLocals(masked) {
+  const out = [];
+  const seen = new Set();
+  const push = (name, typeName) => {
+    if (seen.has(name)) return;
+    seen.add(name);
+    out.push({ name, typeName });
+  };
+  const annotated =
+    /(?:^|[^A-Za-z0-9_])(?:pub\s+)?(?:var|const)\s+([A-Za-z_]\w*)\s*:\s*([A-Za-z_]\w*)/g;
+  let m;
+  while ((m = annotated.exec(masked))) {
+    push(m[1], m[2]);
+  }
+  const inferred =
+    /(?:^|[^A-Za-z0-9_])(?:pub\s+)?(?:var|const)\s+([A-Za-z_]\w*)\s*=\s*([A-Za-z_]\w*)\s*\{/g;
+  while ((m = inferred.exec(masked))) {
+    push(m[1], m[2]);
+  }
+  return out;
+}
+
 function insideAny(pos, ranges) {
   return ranges.some((r) => pos > r.bodyFrom && pos < r.bodyTo);
 }
@@ -134,7 +169,10 @@ function scanSource(src) {
       bodyFrom: body.start,
       bodyTo: body.end,
       extendsName,
-      impls: parseImpls(header),
+      impls: unique([
+        ...parseImpls(header),
+        ...parseNestedImpls(masked, body.start, body.end),
+      ]),
       isNode:
         prevNonemptyLine(masked, nameFrom) === "@node" ||
         (extendsName != null && NODE_BASES.includes(extendsName)),
@@ -225,7 +263,7 @@ function scanSource(src) {
     ...traits.flatMap((t) => t.signals),
   ];
 
-  return { symbols, classes, traits, signals };
+  return { symbols, classes, traits, signals, typedLocals: scanTypedLocals(masked) };
 }
 
 function classAt(file, pos) {
@@ -319,6 +357,62 @@ function allClasses(files) {
   return unique(files.flatMap((f) => f.classes.map((c) => c.name)));
 }
 
+function isSignalName(file, files, name) {
+  if (file.signals.some((s) => s.name === name)) return true;
+  for (const f of files) {
+    if (f.signals.some((s) => s.name === name)) return true;
+    for (const t of f.traits) {
+      if (t.signals.some((s) => s.name === name)) return true;
+    }
+  }
+  return false;
+}
+
+function typeOfLocal(file, name) {
+  const hit = file.typedLocals.find((t) => t.name === name);
+  return hit ? hit.typeName : undefined;
+}
+
+function itemsFromMembers(mem) {
+  return [
+    ...mem.fields.map((name) => ({ name, role: "field" })),
+    ...mem.methods.map((name) => ({ name, role: "method" })),
+    ...mem.signals.map((name) => ({ name, role: "signal" })),
+  ];
+}
+
+function membersFor(file, files, pos, receiver) {
+  const enclosing = classAt(file, pos);
+  if (receiver === "self") {
+    if (!enclosing) return { kind: "list", items: [] };
+    return { kind: "list", items: itemsFromMembers(classMembers(enclosing, files)) };
+  }
+  if (receiver === "super") {
+    if (!enclosing) return { kind: "list", items: [] };
+    return {
+      kind: "list",
+      items: parentMethods(enclosing, files).map((name) => ({
+        name,
+        role: "super",
+      })),
+    };
+  }
+  const fromClass = enclosing
+    ? classMembers(enclosing, files).signals.includes(receiver)
+    : false;
+  if (fromClass || isSignalName(file, files, receiver)) {
+    return { kind: "list", items: [{ name: "emit", role: "emit" }] };
+  }
+  const typeName = typeOfLocal(file, receiver);
+  if (typeName) {
+    const cls = findClass(files, typeName);
+    if (cls) {
+      return { kind: "list", items: itemsFromMembers(classMembers(cls, files)) };
+    }
+  }
+  return { kind: "catalog" };
+}
+
 module.exports = {
   NODE_BASES,
   NODE_FIELDS,
@@ -329,4 +423,7 @@ module.exports = {
   parentMethods,
   allTraits,
   allClasses,
+  isSignalName,
+  typeOfLocal,
+  membersFor,
 };

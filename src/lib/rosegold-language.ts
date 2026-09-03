@@ -6,7 +6,7 @@ const KEYWORDS =
   /^(fn|if|elif|else|while|for|in|match|return|break|continue|pass|import|from|as|struct|class|trait|extends|enum|impl|mod|signal|var|const|pub|self|super)\b/
 
 const TYPES =
-  /^(Void|Bool|Int|Float|String|Str|Array|Map|Option|Result|Vec2)\b/
+  /^(Void|Bool|Int|Float|String|Str|Array|Map|Option|Result|Vec2|Vec3)\b/
 
 const ATOMS = /^(true|false|none)\b/
 

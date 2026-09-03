@@ -13,10 +13,10 @@ import {
   allClasses,
   allTraits,
   classAt,
-  classMembers,
+  membersFor,
   NODE_BASES,
-  parentMethods,
   scanSource,
+  type MemberItem,
   type ScanFile,
 } from '@/lib/rosegold-scan'
 import { docsCardInfo, docCardDom } from '@/lib/rosegold-tooltip'
@@ -56,6 +56,7 @@ const TYPES: Completion[] = [
   'Option',
   'Result',
   'Vec2',
+  'Vec3',
   'Node',
   'Empty',
   'Sprite',
@@ -324,6 +325,14 @@ function memberItem(name: string, type: Completion['type'], detail: string, boos
   return { label: name, type, detail, boost }
 }
 
+function memberFromScan(item: MemberItem): Completion {
+  if (item.role === 'emit') return emitCompletion()
+  const type = item.role === 'field' ? 'variable' : 'function'
+  const detail =
+    item.role === 'super' ? 'super' : item.role === 'signal' ? 'signal' : item.role
+  return memberItem(item.name, type, detail, item.role === 'field' ? 32 : 31)
+}
+
 function filesAround(source: string, modules?: Record<string, string>): ScanFile[] {
   const current = scanSource(source)
   const rest = modules
@@ -398,12 +407,9 @@ function nodeBaseCompletions(): Completion[] {
 }
 
 function selfMembers(cls: NonNullable<ReturnType<typeof classAt>>, files: ScanFile[]): Completion[] {
-  const mem = classMembers(cls, files)
-  return [
-    ...mem.fields.map((n) => memberItem(n, 'variable', 'field', 32)),
-    ...mem.methods.map((n) => memberItem(n, 'function', 'method', 31)),
-    ...mem.signals.map((n) => memberItem(n, 'function', 'signal', 30)),
-  ]
+  const hit = membersFor(files[0]!, files, cls.bodyFrom + 1, 'self')
+  if (hit.kind !== 'list') return []
+  return hit.items.filter((i) => i.role !== 'emit').map(memberFromScan)
 }
 
 export function completeRoseGold(
@@ -421,15 +427,10 @@ export function completeRoseGold(
   if (member) {
     const dot = member.text.lastIndexOf('.')
     const mod = member.text.slice(0, dot)
+    const hit = membersFor(file, files, context.pos, mod)
     let options: Completion[] = []
-    if (mod === 'self') {
-      options = enclosing ? selfMembers(enclosing, files) : []
-    } else if (mod === 'super') {
-      options = enclosing
-        ? parentMethods(enclosing, files).map((n) =>
-            memberItem(n, 'function', 'super', 31),
-          )
-        : []
+    if (hit.kind === 'list') {
+      options = hit.items.map(memberFromScan)
     } else {
       const catalog = catalogMembers(mod)
       options = catalog.length ? catalog : [emitCompletion()]

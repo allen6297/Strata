@@ -246,7 +246,15 @@
     "label": "Vec2",
     "detail": "class",
     "signature": "class Vec2 { var x: Float; var y: Float }",
-    "doc": "Crate 2D vector. Construct with `Vec2 { x, y }`. Methods: `length()`, `add(other)`.",
+    "doc": "Crate 2D vector. Construct with `Vec2 { x, y }`. Methods: `length()`, `add(other)`. Always in scope.",
+    "kind": "type"
+  },
+  {
+    "key": "Vec3",
+    "label": "Vec3",
+    "detail": "class",
+    "signature": "class Vec3 extends Vec2 { var x: Float; var y: Float; var z: Float }",
+    "doc": "Crate 3D vector. Construct with `Vec3 { x, y, z }`. Methods: `length()`, `add(other)`. Always in scope.",
     "kind": "type"
   },
   {
@@ -500,7 +508,7 @@
     "label": "io",
     "detail": "stdlib",
     "signature": "import io",
-    "doc": "Read and write text files. Desktop uses the host disk. WASM Play uses an in-memory VFS (not the host disk).",
+    "doc": "Read, write, append, and remove text files. Desktop uses the host disk. WASM Play uses an in-memory VFS (not the host disk).",
     "kind": "module"
   },
   {
@@ -508,7 +516,7 @@
     "label": "read_text",
     "detail": "(path)",
     "signature": "io.read_text(path: String): Result",
-    "doc": "Read a UTF-8 file. On WASM this is the Play-session VFS, not the host disk.",
+    "doc": "Read a UTF-8 file as Result.Ok(String). Missing or unreadable paths return Result.Err. On WASM this is the Play-session VFS, not the host disk.",
     "kind": "function",
     "template": "read_text(${path})",
     "params": ["path"]
@@ -528,10 +536,40 @@
     "label": "write_text",
     "detail": "(path, text)",
     "signature": "io.write_text(path: String, text: String): Result",
-    "doc": "Write UTF-8 text. On WASM this is the Play-session VFS, not the host disk.",
+    "doc": "Overwrite a UTF-8 file. Creates the file if it is missing. On WASM this is the Play-session VFS, not the host disk.",
     "kind": "function",
     "template": "write_text(${path}, ${text})",
     "params": ["path", "text"]
+  },
+  {
+    "key": "io.append_text",
+    "label": "append_text",
+    "detail": "(path, text)",
+    "signature": "io.append_text(path: String, text: String): Result",
+    "doc": "Append UTF-8 text. Creates the file if it is missing. On WASM this is the Play-session VFS, not the host disk.",
+    "kind": "function",
+    "template": "append_text(${path}, ${text})",
+    "params": ["path", "text"]
+  },
+  {
+    "key": "io.read_lines",
+    "label": "read_lines",
+    "detail": "(path)",
+    "signature": "io.read_lines(path: String): Result",
+    "doc": "Read a UTF-8 file as Result.Ok(Array) of lines (no trailing newlines). Missing or unreadable paths return Result.Err.",
+    "kind": "function",
+    "template": "read_lines(${path})",
+    "params": ["path"]
+  },
+  {
+    "key": "io.remove",
+    "label": "remove",
+    "detail": "(path)",
+    "signature": "io.remove(path: String): Result",
+    "doc": "Delete a file. Returns Result.Err if the path is missing. On WASM this is the Play-session VFS, not the host disk.",
+    "kind": "function",
+    "template": "remove(${path})",
+    "params": ["path"]
   },
   {
     "key": "checks",

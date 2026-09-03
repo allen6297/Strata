@@ -262,7 +262,7 @@ If the typechecker cannot answer, show the static catalog and do not fake a defi
 
 ### SE8 — Flesh out autocomplete
 
-**Next.** The buffer already pops a list. It does not know the language you actually write: `@node` classes, `impl` traits, `signal` contracts, implicit `self`, `super`.
+**Status: done (Sep 3, 2026).** Completions know classes, traits, signals, `self` / `super`, and `@node` hooks. Still **not** an LSP.
 
 **Today** (`src/lib/rosegold-complete.ts`, VS Code `extension.js` + `catalog.json`):
 
@@ -296,8 +296,7 @@ Still **not** an LSP. Prefer a deeper scan of the open buffers (and the same `ca
 ## Phase order
 
 ```
-SE1–SE7 are done.
-  next   SE8  flesh out autocomplete (self. / fields / traits / signals)
+SE1–SE8 are done.
   later  rosegold lsp for VS Code only
 ```
 
@@ -401,7 +400,7 @@ App `keydown` must treat CodeMirror’s content as “typing” (contenteditable
 
 ## How to use this doc
 
-1. SE1–SE7 are in. Next editor work is **SE8** (autocomplete that matches classes / traits / signals).
+1. SE1–SE8 are in. Next editor work is a `rosegold lsp` for VS Code only, if you want it.
 2. Language runtime work stays in [rosegold.md](./rosegold.md); this doc only consumes `check` / WASM diagnostics in SE4.
 3. Engine Play loop stays in [plan.md](./plan.md).
 

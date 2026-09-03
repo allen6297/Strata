@@ -1,7 +1,7 @@
 # Public Option type. Constructors and match stay language-native;
 # methods here are the documented API.
 
-mod option {
+pub mod option {
     pub enum Option<T> {
         Some(T),
         None,

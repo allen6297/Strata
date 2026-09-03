@@ -38,9 +38,9 @@ The language is already past “hello world.” Core syntax, stdlib, modules, a 
 | Functions / vars | `fn`, `var`, `const`, optional types, `return`, `@test`, `@ufcs`                                                                                                                                                                                               |
 | Control flow     | `if` / `elif` / `else`, `while`, `for` over ranges and collections, `break` / `continue`                                                                                                                                                                        |
 | Collections      | Arrays and maps, shared mutability, index assign                                                                                                                                                                                                                |
-| Types            | User `struct` / `class` / `enum` / `impl` / `trait` + `impl Trait for Type` or nested `impl Trait` in a class, `@node class Foo extends Sprite`, `match`, crate `Option` / `Result` / `Vec2` / node types (`.rg`); `Str` aliases `String` |
+| Types            | User `struct` / `class` / `enum` / `impl` / `trait` + `impl Trait for Type` or nested `impl Trait` in a class, `@node class Foo extends Sprite`, `match`, crate `Option` / `Result` / `Vec2` / `Vec3` / node types (`.rg`); `Str` aliases `String` |
 | Modules          | `mod name { … }` is the namespace; same name **merges across files**. `import x;` / `from x import y;` (filename modules still work). Play host uses the script library                                                                                         |
-| Stdlib           | Public `math` / `str` / `option` / `result` / `checks` / `vec` (`Vec2`) / `node` (`Sprite`, …) are crate `stdlib/*.rg`. Trig and string search stay `__math` / `__str`. Host forever: `io`, `strata` (`move`/`rot`/`set`/`spawn`/`destroy`/`play_sound`/`after`/`find`), `input` (`pressed`/`held`) |
+| Stdlib           | Public `math` / `str` / `option` / `result` / `checks` / `vec` (`Vec2`, `Vec3`) / `node` (`Sprite`, …) are crate `stdlib/*.rg`. Trig and string search stay `__math` / `__str`. Host forever: `io`, `strata` (`move`/`rot`/`set`/`spawn`/`destroy`/`play_sound`/`after`/`find`), `input` (`pressed`/`held`) |
 | Builtins         | `print`, `len`, `assert`, `Array(...)`, `Map(...)`                                                                                                                                                                                                              |
 | Operators        | Arithmetic, `//` integer division, `&&` / `\|\|`, bitwise `&` `\|` `^` `<<` `>>` `~` and `&=` `\|=` `^=` on `Int`                                                                                                                                              |
 | UFCS             | `@ufcs` on a free `fn`; `x.foo(y)` → `foo(x, y)` when no inherent method `foo` exists                                                                                                                                                                           |
@@ -53,7 +53,7 @@ The language is already past “hello world.” Core syntax, stdlib, modules, a 
 
 1. **VS Code uses the Rust CLI plus `catalog.json`.** The extension calls `rosegold check` / `hover` / `def` / `fmt`. Point `rosegold.cliPath` at the binary if it is not under `target/`.
 2. **`fmt` keeps `#` comments and `##` docs.** `->` is accepted as a return-type alias for `:`.
-3. **WASM `io` is an in-memory VFS** — `read_text` / `write_text` / `exists` round-trip paths in the Play session; they are not the host disk.
+3. **WASM `io` is an in-memory VFS** — `read_text` / `read_lines` / `write_text` / `append_text` / `remove` / `exists` round-trip paths in the Play session; they are not the host disk.
 4. **RG10 is done** (`class` / `trait` / `@ufcs` / bitwise / `##` / `extends` / `super`). Multiple inheritance / instance `private` stay out. Module `pub` is required inside `mod { }`.
 
 ### Crate map
@@ -187,7 +187,7 @@ Do not invent a large entity query language here. If you need collisions, that i
 | Work item                 | Notes                                                                                            |
 | ------------------------- | ------------------------------------------------------------------------------------------------ |
 | In-memory project modules | `PlaySession` / `CombinedResolver` supplies `{ "utils.rg": "…" }` from the script library        |
-| Sandbox `io`              | wasm32 uses an in-memory VFS (`read_text` / `write_text` / `exists`); not the host disk                  |
+| Sandbox `io`              | wasm32 uses an in-memory VFS (`read_text` / `read_lines` / `write_text` / `append_text` / `remove` / `exists`); not the host disk                  |
 | Same hook API             | WASM `engine_load_scene` / `engine_tick` call `load_program` / `call`, not `run_source` per tick |
 | **Acceptance**            | Same Hero/Coin sources play in `npm run dev` (after `npm run build:wasm`) — no second dialect    |
 
@@ -522,9 +522,9 @@ Keep the public stdlib **small and total**. Prefer a new `math.sin` over a new l
 | ------------------- | -------------------------------------------------------------------------------------------- | -------------------------------- | --------------------------------- |
 | `math`              | crate `math.rg`: `lerp`/`clamp`/`gcd`/… in RoseGold; `__math.sin`/`cos`/`atan2`/`sqrt`/`pow` | —                                | Taylor `sin`                      |
 | `str`               | crate `str.rg` wrapping `__str.contains`/`upper`/`lower`/`trim`/`split`/`slice`              | —                                | regex; `contains` as a char loop  |
-| `vec`               | crate `vec.rg`: `class Vec2` with `length` / `add`                                           | more vector ops if a demo needs  | a language-level vector type      |
+| `vec`               | crate `vec.rg`: `class Vec2` / `class Vec3 extends Vec2` with `length` / `add`                | more vector ops if a demo needs  | a language-level vector type      |
 | `node`              | crate `node.rg`: `Node` / `Empty` / `Sprite` / … for `@node class`                            | more node fields if a demo needs | replacing Entity.kind with the class name |
-| `io`                | read/write/exists (native); stub on WASM                                                     | —                                | network, directories              |
+| `io`                | `read_text` / `read_lines` / `write_text` / `append_text` / `remove` / `exists` (native); WASM is in-memory VFS | —                                | network, directories              |
 | `checks`            | crate `checks.rg` on `assert`                                                                | keep for `@test`                 | a second test framework           |
 | `strata`            | `move`, `rot`, `set`, `spawn` (inline or prefab), `destroy`, `play_sound`, `after`, `find`  | —                                | entity lists, query language      |
 | `input`             | `pressed` / `held` (KeyboardEvent codes)                                                     | remapping UI in the language     | action maps as a language feature |
