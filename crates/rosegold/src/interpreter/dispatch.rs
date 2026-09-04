@@ -1,5 +1,5 @@
 //! Call dispatch: builtins, instance methods, UFCS, and host modules
-//! (`strata`, `input`, `io`, `__math`, `__str`).
+//! (`strata`, `input`, `io`, `time`, `ui`, `__math`, `__str`).
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -676,6 +676,71 @@ impl super::eval::EvalContext {
                 }
                 let path = expect_string_arg(&args, 0, "io.exists", "path", span)?;
                 Ok(Value::Bool(io_exists(&path)))
+            }
+            ("io", "is_dir") => {
+                if args.len() != 1 {
+                    return Err(runtime_err("io.is_dir takes 1 argument".to_string(), span));
+                }
+                let path = expect_string_arg(&args, 0, "io.is_dir", "path", span)?;
+                Ok(Value::Bool(io_is_dir(&path)))
+            }
+            ("io", "mkdir") => {
+                if args.len() != 1 {
+                    return Err(runtime_err("io.mkdir takes 1 argument".to_string(), span));
+                }
+                let path = expect_string_arg(&args, 0, "io.mkdir", "path", span)?;
+                Ok(io_unit_result(io_mkdir(&path)))
+            }
+            ("io", "list_dir") => {
+                if args.len() != 1 {
+                    return Err(runtime_err(
+                        "io.list_dir takes 1 argument".to_string(),
+                        span,
+                    ));
+                }
+                let path = expect_string_arg(&args, 0, "io.list_dir", "path", span)?;
+                Ok(match io_list_dir(&path) {
+                    Ok(names) => {
+                        let values: Vec<Value> = names.into_iter().map(Value::String).collect();
+                        result_ok(Value::Array(Rc::new(RefCell::new(values))))
+                    }
+                    Err(e) => result_err(e),
+                })
+            }
+            ("time", "now") => {
+                if !args.is_empty() {
+                    return Err(runtime_err("time.now takes 0 arguments".to_string(), span));
+                }
+                Ok(Value::Float(unix_now_secs()))
+            }
+            ("time", "elapsed") => {
+                if !args.is_empty() {
+                    return Err(runtime_err(
+                        "time.elapsed takes 0 arguments".to_string(),
+                        span,
+                    ));
+                }
+                Ok(Value::Float(self.started.elapsed_secs()))
+            }
+            ("ui", "text") => {
+                if args.len() != 3 {
+                    return Err(runtime_err(
+                        "ui.text takes 3 arguments".to_string(),
+                        span,
+                    ));
+                }
+                let x = as_f64(&args[0]).ok_or_else(|| {
+                    runtime_err("ui.text expects numbers for x, y".to_string(), span)
+                })?;
+                let y = as_f64(&args[1]).ok_or_else(|| {
+                    runtime_err("ui.text expects numbers for x, y".to_string(), span)
+                })?;
+                let text = match &args[2] {
+                    Value::String(s) => s.clone(),
+                    other => other.to_string(),
+                };
+                self.effects.push(HostEffect::UiText { x, y, text });
+                Ok(Value::Void)
             }
             ("Array", "first") => {
                 if args.len() != 1 {

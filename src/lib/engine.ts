@@ -21,6 +21,12 @@ export interface EngineInfo {
   scriptHost: string
 }
 
+export interface EngineHudItem {
+  x: number
+  y: number
+  text: string
+}
+
 export interface EngineSideEffect {
   type: 'play_sound'
   name?: string | null
@@ -31,6 +37,7 @@ export interface EngineFrame {
   scene: SceneDocument
   stdout: string
   sideEffects: EngineSideEffect[]
+  hud?: EngineHudItem[]
   hadError?: boolean
 }
 

@@ -17,6 +17,7 @@ interface ViewportProps {
   gridSize?: number
   textureUrlById: Record<string, string>
   renderLayers?: RenderLayer[]
+  hud?: { x: number; y: number; text: string }[]
   onSelect: (id: string | null, opts?: { additive?: boolean }) => void
   onMoveEntity: (id: string, worldX: number, worldY: number) => void
   onMoveBegin?: () => void
@@ -51,6 +52,7 @@ export function Viewport({
   gridSize = 16,
   textureUrlById,
   renderLayers = [],
+  hud = [],
   onSelect,
   onMoveEntity,
   onMoveBegin,
@@ -97,6 +99,7 @@ export function Viewport({
   const gridRef = useRef(gridSize)
   const textureUrlRef = useRef(textureUrlById)
   const layersRef = useRef(renderLayers)
+  const hudRef = useRef(hud)
   const toolRef = useRef(tool)
   const onSelectRef = useRef(onSelect)
   const onMoveEntityRef = useRef(onMoveEntity)
@@ -119,6 +122,7 @@ export function Viewport({
   gridRef.current = gridSize
   textureUrlRef.current = textureUrlById
   layersRef.current = renderLayers
+  hudRef.current = hud
   toolRef.current = tool
   onSelectRef.current = onSelect
   onMoveEntityRef.current = onMoveEntity
@@ -494,22 +498,44 @@ export function Viewport({
 
       ctx.restore()
 
+      const hudItems = hudRef.current
+      if (inPlay && hudItems.length) {
+        ctx.save()
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+        ctx.font = '600 22px "IBM Plex Sans", sans-serif'
+        ctx.textAlign = 'left'
+        ctx.textBaseline = 'top'
+        ctx.lineJoin = 'round'
+        ctx.lineWidth = 4
+        for (const item of hudItems) {
+          ctx.strokeStyle = 'rgba(12, 8, 10, 0.85)'
+          ctx.strokeText(item.text, item.x, item.y)
+          ctx.fillStyle = '#f2c8b4'
+          ctx.fillText(item.text, item.x, item.y)
+        }
+        ctx.restore()
+      }
+
+      const chipH = inPlay ? 58 : 44
+      const chipY = inPlay ? Math.max(10, h - chipH - 10) : 10
       ctx.fillStyle = 'rgba(20,22,26,0.72)'
-      ctx.fillRect(10, 10, inPlay ? 250 : 210, inPlay ? 58 : 44)
+      ctx.fillRect(10, chipY, inPlay ? 250 : 210, chipH)
       ctx.strokeStyle = '#2c313c'
-      ctx.strokeRect(10, 10, inPlay ? 250 : 210, inPlay ? 58 : 44)
+      ctx.strokeRect(10, chipY, inPlay ? 250 : 210, chipH)
       ctx.fillStyle = '#8b93a7'
       ctx.font = '500 11px "IBM Plex Mono", monospace'
+      ctx.textAlign = 'left'
+      ctx.textBaseline = 'alphabetic'
       ctx.fillText(
         `zoom ${(cam.zoom * 100).toFixed(0)}% · ${inPlay ? 'PLAY' : 'EDIT'}${snapRef.current && !inPlay ? ' · SNAP' : ''}`,
         18,
-        28,
+        chipY + 18,
       )
       if (inPlay) {
-        ctx.fillText('← → move · Space = jump sound', 18, 44)
-        ctx.fillText(`cam ${cam.x.toFixed(0)}, ${cam.y.toFixed(0)}`, 18, 58)
+        ctx.fillText('← → move · Space = jump sound', 18, chipY + 34)
+        ctx.fillText(`cam ${cam.x.toFixed(0)}, ${cam.y.toFixed(0)}`, 18, chipY + 48)
       } else {
-        ctx.fillText(`cam ${cam.x.toFixed(0)}, ${cam.y.toFixed(0)} · grid ${grid}`, 18, 44)
+        ctx.fillText(`cam ${cam.x.toFixed(0)}, ${cam.y.toFixed(0)} · grid ${grid}`, 18, chipY + 34)
       }
     }
 

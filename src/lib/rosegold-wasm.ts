@@ -270,6 +270,7 @@ function coerceFrame(raw: EngineFrame | null | undefined): EngineFrame | null {
     scene: raw.scene,
     stdout: raw.stdout ?? '',
     sideEffects: raw.sideEffects ?? [],
+    hud: raw.hud ?? [],
     hadError: Boolean(raw.hadError),
   }
 }

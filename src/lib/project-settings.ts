@@ -5,15 +5,16 @@ export const PROJECT_SETTINGS_KEY = 'strata.project.v1'
 export const PROJECT_SETTINGS_FILE = 'strata.json'
 
 export function defaultProjectSettings(): ProjectSettings {
-  return { renderLayers: DEFAULT_RENDER_LAYERS.map((l) => ({ ...l })) }
+  return { name: '', renderLayers: DEFAULT_RENDER_LAYERS.map((l) => ({ ...l })) }
 }
 
 export function parseProjectSettings(data: unknown): ProjectSettings {
   const fallback = defaultProjectSettings()
   if (!data || typeof data !== 'object') return fallback
-  const raw = data as { renderLayers?: unknown }
+  const raw = data as { name?: unknown; renderLayers?: unknown }
+  const name = typeof raw.name === 'string' ? raw.name : ''
   if (!Array.isArray(raw.renderLayers) || raw.renderLayers.length === 0) {
-    return fallback
+    return { ...fallback, name }
   }
   const layers: RenderLayer[] = []
   for (const item of raw.renderLayers) {
@@ -26,7 +27,7 @@ export function parseProjectSettings(data: unknown): ProjectSettings {
       order: Number.isFinite(Number(l.order)) ? Number(l.order) : layers.length,
     })
   }
-  return layers.length ? { renderLayers: layers } : fallback
+  return layers.length ? { name, renderLayers: layers } : { ...fallback, name }
 }
 
 export function loadProjectSettingsFromStorage(): ProjectSettings {

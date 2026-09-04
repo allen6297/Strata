@@ -27,6 +27,7 @@ interface ScriptPanelProps {
   onRunScript?: (script: AssetItem) => void
   reveal?: ScriptReveal | null
   onJumpSymbol?: (scriptId: string, line: number, col: number) => void
+  fontSize?: number
 }
 
 export function ScriptPanel({
@@ -42,6 +43,7 @@ export function ScriptPanel({
   onRunScript,
   reveal = null,
   onJumpSymbol,
+  fontSize,
 }: ScriptPanelProps) {
   const [diagnostics, setDiagnostics] = useState<Record<string, RgDiagnostic[]>>(
     {},
@@ -250,6 +252,7 @@ export function ScriptPanel({
               if (!isCrate(script.id)) onChangeContent(script.id, value)
             }}
             disabled={isCrate(script.id)}
+            fontSize={fontSize}
             onRun={canRun ? () => onRunScript?.(script) : undefined}
             diagnostics={shownDiagnostics}
             diagnosticsReady={diagnosticsReady}

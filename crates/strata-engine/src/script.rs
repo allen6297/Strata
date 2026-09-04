@@ -75,6 +75,11 @@ pub enum StrataDirective {
     delay: f32,
     method: String,
   },
+  UiText {
+    x: f32,
+    y: f32,
+    text: String,
+  },
 }
 
 /// Per-entity interpreter. `EvalContext` is Rc/RefCell (not `Send`);
@@ -617,6 +622,13 @@ impl RoseGoldScriptHost {
             method: method.clone(),
           });
         }
+        StrataDirective::UiText { x, y, text } => {
+          side_effects.push(StrataDirective::UiText {
+            x: *x,
+            y: *y,
+            text: text.clone(),
+          });
+        }
       }
     }
     self.dispatch_signals(world, emit_jobs, conn_snap);
@@ -961,7 +973,16 @@ pub struct PlayFrame {
   pub scene: crate::scene::SceneFile,
   pub stdout: String,
   pub side_effects: Vec<PlaySideEffect>,
+  pub hud: Vec<HudText>,
   pub had_error: bool,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HudText {
+  pub x: f32,
+  pub y: f32,
+  pub text: String,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -985,6 +1006,18 @@ impl PlayFrame {
           StrataDirective::PlaySound { name, url } => Some(PlaySideEffect::PlaySound {
             name: name.clone(),
             url: url.clone(),
+          }),
+          _ => None,
+        })
+        .collect(),
+      hud: host
+        .last_side_effects
+        .iter()
+        .filter_map(|d| match d {
+          StrataDirective::UiText { x, y, text } => Some(HudText {
+            x: *x,
+            y: *y,
+            text: text.clone(),
           }),
           _ => None,
         })
@@ -1274,6 +1307,11 @@ fn host_effect_to_directive(effect: HostEffect, entity_id: &str) -> StrataDirect
       entity_id: entity_id.to_string(),
       delay: delay as f32,
       method,
+    },
+    HostEffect::UiText { x, y, text } => StrataDirective::UiText {
+      x: x as f32,
+      y: y as f32,
+      text,
     },
   }
 }
@@ -2151,10 +2189,12 @@ fn on_update(name: String, x: Float, y: Float, dt: Float): Int {
       frame.stdout
     );
     assert!(!frame.had_error, "stdout={}", frame.stdout);
-  }
-
-  #[test]
-  fn overlap_fires_on_enter_and_on_exit() {
+    assert_eq!(
+      frame.hud.iter().map(|h| h.text.as_str()).collect::<Vec<_>>(),
+      vec!["coins 0"],
+      "hud={:?}",
+      frame.hud
+    );
     let scene = SceneFile {
       version: 2,
       name: "test".into(),
@@ -2501,6 +2541,38 @@ fn on_ready(name: String, x: Float, y: Float): Int {
       host.last_side_effects
     );
     assert!(!host.last_stdout.contains("audio not found"));
+  }
+
+  #[test]
+  fn ui_text_reaches_play_frame() {
+    let scene = SceneFile {
+      version: 2,
+      name: "test".into(),
+      mode: Mode::D2,
+      prefabs: vec![],
+      entities: vec![entity("e1", "Hero", 0.0, 0.0)],
+    };
+    let mut session = PlaySession::new();
+    session.set_scripts(vec![(
+      "e1".into(),
+      r#"
+import ui;
+
+fn on_update(name: String, x: Float, y: Float, dt: Float): Int {
+    ui.text(16.0, 24.0, "coins 3");
+    return 0;
+}
+"#
+      .into(),
+      Some("Hud.rg".into()),
+    )]);
+    session.load_scene(scene);
+    let frame = session.tick(0.016);
+    assert!(!frame.had_error, "stdout={}", frame.stdout);
+    assert_eq!(frame.hud.len(), 1, "hud={:?}", frame.hud);
+    assert_eq!(frame.hud[0].text, "coins 3");
+    assert!((frame.hud[0].x - 16.0).abs() < 0.001);
+    assert!((frame.hud[0].y - 24.0).abs() < 0.001);
   }
 
   #[test]

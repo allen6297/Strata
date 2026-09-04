@@ -4,7 +4,12 @@ import { entityDefaults } from '@/lib/scene'
 import { uid } from '@/lib/utils'
 import { isTauri } from '@/lib/tauri'
 
-export const DEFAULT_PLAYER_SCRIPT = `var jump_cd: Float = 0.0;
+export const DEFAULT_PLAYER_SCRIPT = `import strata;
+import input;
+import ui;
+
+var jump_cd: Float = 0.0;
+var coins: Int = 0;
 
 fn on_ready(name: String, x: Float, y: Float): Int {
     print("[ready] Player — arrows/WASD move, Space jump, walk into Coin, Q destroy Coin");
@@ -14,6 +19,7 @@ fn on_ready(name: String, x: Float, y: Float): Int {
 }
 
 fn on_coin(amount: Int): Int {
+    coins = coins + amount;
     print(f"[coin] {amount}");
     strata.play_sound("jump.wav");
     return 0;
@@ -54,6 +60,7 @@ fn on_update(name: String, x: Float, y: Float, dt: Float): Int {
     if input.pressed("KeyQ") {
         strata.destroy("Coin");
     }
+    ui.text(16.0, 16.0, f"coins {coins}");
     return 0;
 }
 

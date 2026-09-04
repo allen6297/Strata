@@ -1,7 +1,7 @@
 {
   "version": 2,
   "name": "demo.scene",
-  "mode": "script",
+  "mode": "2d",
   "entities": [
     {
       "parentId": null,
@@ -411,10 +411,10 @@
       "type": "script",
       "language": "rosegold",
       "content": "## Degrees per second. Shown on the Coin Inspector card.\nimport strata;\nimport math;\n## Hello:\n@export_group(\"COIN\")\n## Degrees per second. Shown on the coin inspector card.\n@export var spin: Float = 8.0;\nvar frames: Int = 0;\nvar popping: Bool = false;\nvar pop_t: Float = 0.0;\n\nsignal collected(amount: Int);\n\nfn on_ready(name: Str, x: Float, y: Float): Int {\n    print(\"[ready] coin\");\n    return 0;\n}\n\nfn on_enter(other: Str, x: Float, y: Float): Int {\n    print(f\"[enter] coin/{other}\");\n    collected.emit(1);\n    popping = true;\n    pop_t = 0.0;\n    strata.after(0.35, \"pop\");\n    return 0;\n}\n\nfn pop(): Int {\n    strata.destroy();\n    return 0;\n}\n\nfn on_destroy(): Int {\n    print(\"[gone] coin\");\n    return 0;\n}\n\n## Called every Play frame.\nfn on_update(name: Str, x: Float, y: Float, dt: Float): Int {\n    frames = frames + 1;\n    if popping {\n        pop_t = pop_t + dt;\n        var t = math.clamp(pop_t / 0.35, 0.0, 1.0);\n        strata.rot(math.lerp(spin, spin * 4.0, t));\n    } else {\n        strata.rot(spin);\n    }\n    return 0;\n}\n\nfn main(): Int {\n    return on_ready(\"Coin\", 0.0, 0.0);\n}\n\nfn on_exit(other: Str, x: Float, y: Float): Void {\n    print(f\"[exit] coin/{other}\");\n    pass;\n}\n",
-      "size": "1203 B",
+      "size": "1.2 KB",
       "path": "/Users/kalob/Code/strata/examples/demo-project/scripts/CoinSpin.rg",
       "relativePath": "scripts/CoinSpin.rg",
-      "bytes": 1137
+      "bytes": 1203
     },
     {
       "id": "file:/Users/kalob/Code/strata/examples/demo-project/scripts/Hero.rg",

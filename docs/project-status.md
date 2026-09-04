@@ -14,7 +14,7 @@ Snapshot: **Thursday, Sep 3, 2026**
 - Nested `impl Trait { … }` in a class body; `class Vec3 extends Point impl Named, Drawable`; `impl Trait for Type` still works
 - `@node class MyNode extends Sprite`: stdlib `node.rg`, Play instance hooks, Add Node Scripts group
 - Method calls on untyped values (`foo.bar()`) and unknown methods on primitives (`1.nope()`) are type errors
-- Module `pub` (required inside `mod { }`); `->` return types; `match Rect(w, h)` / named payload binds; undefined identifiers; `rosegold fmt`; WASM `io` in-memory VFS
+- Module `pub` (required inside `mod { }`); `->` return types; `match Rect(w, h)` / named payload binds; undefined identifiers; `rosegold fmt`; WASM `io` in-memory VFS (`mkdir` / `list_dir` / `is_dir`); host `time.now` / `time.elapsed`
 - `strata.find("Coin")` / `strata.find()` (nearest other); returns a name or `none`
 - `str.split` / `str.slice`; crate `Vec2` class (`stdlib/vec.rg`)
 - RoseGold-PY class example: `examples/class_trait.rg`

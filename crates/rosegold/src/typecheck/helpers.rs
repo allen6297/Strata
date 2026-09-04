@@ -21,9 +21,14 @@ pub(super) fn native_method_arity(ty: &str, name: &str) -> Option<usize> {
 
 pub(super) fn host_return_type(module: &str, name: &str) -> Option<&'static str> {
     Some(match (module, name) {
-        ("io", "read_text" | "read_lines" | "write_text" | "append_text" | "remove") => "Result",
-        ("io", "exists") => "Bool",
+        (
+            "io",
+            "read_text" | "read_lines" | "write_text" | "append_text" | "remove" | "mkdir"
+            | "list_dir",
+        ) => "Result",
+        ("io", "exists" | "is_dir") => "Bool",
         ("input", "pressed" | "held") => "Bool",
+        ("time", "now" | "elapsed") => "Float",
         _ => return None,
     })
 }
@@ -98,8 +103,13 @@ fn damerau_levenshtein(a: &str, b: &str) -> usize {
 /// Known native host / primitive arities. Public math/str/checks/option come from `.rg`.
 pub fn stdlib_arity(module: &str, name: &str) -> Option<usize> {
     Some(match (module, name) {
-        ("io", "read_text" | "read_lines" | "exists" | "remove") => 1,
+        (
+            "io",
+            "read_text" | "read_lines" | "exists" | "remove" | "mkdir" | "list_dir" | "is_dir",
+        ) => 1,
         ("io", "write_text" | "append_text") => 2,
+        ("time", "now" | "elapsed") => 0,
+        ("ui", "text") => 3,
         ("strata", "rot" | "play_sound" | "spawn") => 1,
         ("strata", "move" | "set" | "after") => 2,
         ("input", "pressed" | "held") => 1,

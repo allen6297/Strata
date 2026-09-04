@@ -48,6 +48,13 @@ pub fn install(app: &tauri::App) -> tauri::Result<()> {
     .separator()
     .item(&open_scene)
     .item(&save_scene)
+    .separator()
+    .item(
+      &MenuItemBuilder::new("Project Settings…")
+        .id("project_settings")
+        .accelerator("CmdOrCtrl+Shift+,")
+        .build(handle)?,
+    )
     .build()?;
 
   // MARK: - Edit
@@ -132,6 +139,10 @@ pub fn install(app: &tauri::App) -> tauri::Result<()> {
   let toggle_theme = MenuItemBuilder::new("Toggle Theme")
     .id("toggle_theme")
     .build(handle)?;
+  let editor_settings = MenuItemBuilder::new("Editor Settings…")
+    .id("editor_settings")
+    .accelerator("CmdOrCtrl+,")
+    .build(handle)?;
   let reset_layout = MenuItemBuilder::new("Reset Layout")
     .id("reset_layout")
     .build(handle)?;
@@ -158,6 +169,7 @@ pub fn install(app: &tauri::App) -> tauri::Result<()> {
     .separator()
     .item(&toggle_snap)
     .separator()
+    .item(&editor_settings)
     .item(&toggle_theme)
     .separator()
     .item(&toggle_hierarchy)

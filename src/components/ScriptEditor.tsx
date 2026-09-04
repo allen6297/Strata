@@ -78,6 +78,7 @@ interface ScriptEditorProps {
   diagnosticsReady?: boolean
   reveal?: ScriptReveal | null
   modules?: Record<string, string>
+  fontSize?: number
   onJumpSymbol?: (info: RgSymbol) => void
 }
 
@@ -161,6 +162,7 @@ export function ScriptEditor({
   diagnosticsReady = false,
   reveal = null,
   modules = {},
+  fontSize = 13,
   onJumpSymbol,
 }: ScriptEditorProps) {
   const parentRef = useRef<HTMLDivElement>(null)
@@ -253,7 +255,7 @@ export function ScriptEditor({
           }),
           roseGoldHover(() => navRef.current),
           roseGoldJump(() => navRef.current),
-          themeComp.current.of(scriptEditorTheme(dark)),
+          themeComp.current.of(scriptEditorTheme(dark, fontSize)),
           readOnlyComp.current.of(EditorState.readOnly.of(!!disabled)),
           EditorView.editorAttributes.of({
             'data-testid': 'script-editor',
@@ -355,9 +357,9 @@ export function ScriptEditor({
     const view = viewRef.current
     if (!view) return
     view.dispatch({
-      effects: themeComp.current.reconfigure(scriptEditorTheme(dark)),
+      effects: themeComp.current.reconfigure(scriptEditorTheme(dark, fontSize)),
     })
-  }, [dark])
+  }, [dark, fontSize])
 
   useEffect(() => {
     const view = viewRef.current

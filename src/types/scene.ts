@@ -83,6 +83,8 @@ export interface RenderLayer {
 }
 
 export interface ProjectSettings {
+  /** Display name. Blank → folder name. */
+  name: string
   renderLayers: RenderLayer[]
 }
 

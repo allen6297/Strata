@@ -51,8 +51,10 @@ pub struct EvalContext {
     find_world: Vec<WorldEntry>,
     /// Set when `return` runs inside a `match` expression so the enclosing function exits.
     pending_return: Option<Value>,
-    /// Host modules (`strata`, `input`, `io`) the program imported.
+    /// Host modules (`strata`, `input`, `io`, `time`) the program imported.
     imported_host: HashSet<String>,
+    /// Capture for `time.elapsed` — this VM, not frame `dt`.
+    pub(super) started: Clock,
     /// `@node` class instance for this program, if any.
     node_class: Option<String>,
     node_instance: Option<Value>,
@@ -169,6 +171,7 @@ impl EvalContext {
             node_instance: None,
             imported_host: HashSet::new(),
             module_fns: Vec::new(),
+            started: Clock::capture(),
         };
         ctx.init_stdlib();
         ctx
@@ -194,6 +197,8 @@ impl EvalContext {
         self.stdlib.insert("strata".to_string(), HashMap::new());
         self.stdlib.insert("input".to_string(), HashMap::new());
         self.stdlib.insert("io".to_string(), HashMap::new());
+        self.stdlib.insert("time".to_string(), HashMap::new());
+        self.stdlib.insert("ui".to_string(), HashMap::new());
         self.stdlib.insert("Array".to_string(), HashMap::new());
     }
 
@@ -849,7 +854,7 @@ impl EvalContext {
         }
         let module_name = &import.path[0];
 
-        // Native host modules (`strata`, `input`, `io`) — require `import`.
+        // Native host modules (`strata`, `input`, `io`, `time`, `ui`) — require `import`.
         // `import strata.Sprite` is the node type from `node.rg`, not a host fn.
         if crate::stdlib::is_node_type_import(&import.path) {
             self.load_module("node", span)?;

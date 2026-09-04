@@ -36,6 +36,8 @@ export type MenuAction =
   | 'toggle_assets'
   | 'toggle_log'
   | 'reset_layout'
+  | 'project_settings'
+  | 'editor_settings'
   // MARK: - Help
   | 'help_docs'
 
@@ -75,6 +77,8 @@ const MENU_ACTIONS = new Set<string>([
   'toggle_assets',
   'toggle_log',
   'reset_layout',
+  'project_settings',
+  'editor_settings',
   // MARK: - Help
   'help_docs',
 ])

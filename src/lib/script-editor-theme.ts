@@ -29,14 +29,14 @@ export const roseGoldHighlight = HighlightStyle.define([
   { tag: t.invalid, color: 'var(--danger)' },
 ])
 
-export function scriptEditorTheme(dark: boolean) {
+export function scriptEditorTheme(dark: boolean, fontSize = 13) {
   return EditorView.theme(
     {
       '&': {
         height: '100%',
         backgroundColor: 'var(--bg-input)',
         color: 'var(--text)',
-        fontSize: '13px',
+        fontSize: `${fontSize}px`,
       },
       '&.cm-focused': {
         outline: 'none',

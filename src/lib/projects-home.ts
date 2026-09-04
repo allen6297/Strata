@@ -38,6 +38,7 @@ const NEW_PROJECT_SCENE = `{
 }`
 
 const NEW_PROJECT_SETTINGS = `{
+  "name": "",
   "renderLayers": [{ "id": "layer_default", "name": "Default", "order": 0 }]
 }`
 

@@ -245,6 +245,14 @@ const SNIPPETS: Completion[] = [
     label: 'strata.after',
     boost: 8,
   }),
+  fromDocs('time.now', 'time.now()', {
+    label: 'time.now',
+    boost: 8,
+  }),
+  fromDocs('ui.text', 'ui.text(${x}, ${y}, "${text}")', {
+    label: 'ui.text',
+    boost: 8,
+  }),
   fromDocs('input.pressed', 'input.pressed("${code}")', {
     label: 'input.pressed',
     boost: 9,

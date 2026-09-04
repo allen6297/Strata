@@ -1,8 +1,10 @@
 import utils;
 import strata;
 import input;
+import ui;
 
 var frames: Int = 0;
+var coins: Int = 0;
 
 fn on_ready(name: Str, x: Float, y: Float): Int {
     print("[ready] from project");
@@ -12,6 +14,7 @@ fn on_ready(name: Str, x: Float, y: Float): Int {
 }
 
 fn on_coin(amount: Int): Int {
+    coins = coins + amount;
     print(f"[coin] {amount}");
     strata.play_sound("jump.wav");
     return 0;
@@ -30,6 +33,7 @@ fn on_exit(other: Str, x: Float, y: Float): Int {
 fn on_update(name: Str, x: Float, y: Float, dt: Float): Int {
     frames = frames + 1;
     utils.move_line(1.0, 0.0);
+    ui.text(16.0, 16.0, f"coins {coins}");
     if input.pressed("Space") {
         strata.play_sound("jump.wav");
     }

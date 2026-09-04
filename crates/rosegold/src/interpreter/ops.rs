@@ -286,53 +286,197 @@ pub(super) fn apply_assign_op(
     }
 }
 
+/// Start time for `time.elapsed` (this VM, not frame `dt`).
+#[derive(Clone, Copy)]
+pub(super) struct Clock {
+    #[cfg(not(target_arch = "wasm32"))]
+    start: std::time::Instant,
+    #[cfg(target_arch = "wasm32")]
+    start_ms: f64,
+}
+
+impl Clock {
+    pub(super) fn capture() -> Self {
+        Self {
+            #[cfg(not(target_arch = "wasm32"))]
+            start: std::time::Instant::now(),
+            #[cfg(target_arch = "wasm32")]
+            start_ms: js_sys::Date::now(),
+        }
+    }
+
+    pub(super) fn elapsed_secs(self) -> f64 {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.start.elapsed().as_secs_f64()
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            ((js_sys::Date::now() - self.start_ms) / 1000.0).max(0.0)
+        }
+    }
+}
+
+pub(super) fn unix_now_secs() -> f64 {
+    #[cfg(target_arch = "wasm32")]
+    {
+        js_sys::Date::now() / 1000.0
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs_f64())
+            .unwrap_or(0.0)
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn normalize_io_path(path: &str) -> String {
+    let p = path.replace('\\', "/");
+    let p = p.trim_end_matches('/');
+    if p.is_empty() {
+        ".".to_string()
+    } else {
+        p.to_string()
+    }
+}
+
 #[cfg(target_arch = "wasm32")]
 mod wasm_fs {
     use std::cell::RefCell;
-    use std::collections::HashMap;
+    use std::collections::{HashMap, HashSet};
+
+    use super::normalize_io_path;
+
+    enum Entry {
+        File(String),
+        Dir,
+    }
 
     thread_local! {
-      static FILES: RefCell<HashMap<String, String>> = RefCell::new(HashMap::new());
+      static FILES: RefCell<HashMap<String, Entry>> = RefCell::new(HashMap::new());
+    }
+
+    fn child_name(full: &str, dir: &str) -> Option<String> {
+        let rest = if dir == "." {
+            full
+        } else {
+            full.strip_prefix(&format!("{dir}/"))?
+        };
+        if rest.is_empty() {
+            return None;
+        }
+        Some(rest.split('/').next()?.to_string())
+    }
+
+    fn has_children(map: &HashMap<String, Entry>, dir: &str) -> bool {
+        map.keys().any(|k| child_name(k, dir).is_some())
+    }
+
+    fn is_dir_entry(map: &HashMap<String, Entry>, path: &str) -> bool {
+        matches!(map.get(path), Some(Entry::Dir)) || has_children(map, path)
     }
 
     pub fn read(path: &str) -> Result<String, String> {
-        FILES.with(|fs| {
-            fs.borrow()
-                .get(path)
-                .cloned()
-                .ok_or_else(|| format!("file not found: {path}"))
+        let path = normalize_io_path(path);
+        FILES.with(|fs| match fs.borrow().get(&path) {
+            Some(Entry::File(content)) => Ok(content.clone()),
+            Some(Entry::Dir) => Err(format!("is a directory: {path}")),
+            None => Err(format!("file not found: {path}")),
         })
     }
 
     pub fn write(path: &str, content: &str) -> Result<(), String> {
+        let path = normalize_io_path(path);
         FILES.with(|fs| {
-            fs.borrow_mut()
-                .insert(path.to_string(), content.to_string());
+            let mut map = fs.borrow_mut();
+            if matches!(map.get(&path), Some(Entry::Dir)) {
+                return Err(format!("is a directory: {path}"));
+            }
+            map.insert(path, Entry::File(content.to_string()));
             Ok(())
         })
     }
 
     pub fn append(path: &str, content: &str) -> Result<(), String> {
+        let path = normalize_io_path(path);
         FILES.with(|fs| {
             let mut map = fs.borrow_mut();
-            let entry = map.entry(path.to_string()).or_default();
-            entry.push_str(content);
-            Ok(())
+            match map.get_mut(&path) {
+                Some(Entry::Dir) => Err(format!("is a directory: {path}")),
+                Some(Entry::File(existing)) => {
+                    existing.push_str(content);
+                    Ok(())
+                }
+                None => {
+                    map.insert(path, Entry::File(content.to_string()));
+                    Ok(())
+                }
+            }
         })
     }
 
     pub fn remove(path: &str) -> Result<(), String> {
+        let path = normalize_io_path(path);
         FILES.with(|fs| {
-            if fs.borrow_mut().remove(path).is_some() {
-                Ok(())
-            } else {
-                Err(format!("file not found: {path}"))
+            let mut map = fs.borrow_mut();
+            match map.remove(&path) {
+                Some(Entry::File(_)) => Ok(()),
+                Some(Entry::Dir) => {
+                    map.insert(path.clone(), Entry::Dir);
+                    Err(format!("is a directory: {path}"))
+                }
+                None => Err(format!("file not found: {path}")),
             }
         })
     }
 
     pub fn exists(path: &str) -> bool {
-        FILES.with(|fs| fs.borrow().contains_key(path))
+        let path = normalize_io_path(path);
+        FILES.with(|fs| {
+            let map = fs.borrow();
+            map.contains_key(&path) || is_dir_entry(&map, &path)
+        })
+    }
+
+    pub fn is_dir(path: &str) -> bool {
+        let path = normalize_io_path(path);
+        FILES.with(|fs| is_dir_entry(&fs.borrow(), &path))
+    }
+
+    pub fn mkdir(path: &str) -> Result<(), String> {
+        let path = normalize_io_path(path);
+        FILES.with(|fs| {
+            let mut map = fs.borrow_mut();
+            if matches!(map.get(&path), Some(Entry::File(_))) {
+                return Err(format!("file exists: {path}"));
+            }
+            map.insert(path, Entry::Dir);
+            Ok(())
+        })
+    }
+
+    pub fn list_dir(path: &str) -> Result<Vec<String>, String> {
+        let path = normalize_io_path(path);
+        FILES.with(|fs| {
+            let map = fs.borrow();
+            if matches!(map.get(&path), Some(Entry::File(_))) {
+                return Err(format!("not a directory: {path}"));
+            }
+            if !is_dir_entry(&map, &path) {
+                return Err(format!("file not found: {path}"));
+            }
+            let mut names: HashSet<String> = HashSet::new();
+            for key in map.keys() {
+                if let Some(name) = child_name(key, &path) {
+                    names.insert(name);
+                }
+            }
+            let mut names: Vec<String> = names.into_iter().collect();
+            names.sort();
+            Ok(names)
+        })
     }
 }
 
@@ -395,6 +539,46 @@ pub(super) fn io_exists(path: &str) -> bool {
     #[cfg(not(target_arch = "wasm32"))]
     {
         std::path::Path::new(path).exists()
+    }
+}
+
+pub(super) fn io_is_dir(path: &str) -> bool {
+    #[cfg(target_arch = "wasm32")]
+    {
+        wasm_fs::is_dir(path)
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        std::path::Path::new(path).is_dir()
+    }
+}
+
+pub(super) fn io_mkdir(path: &str) -> Result<(), String> {
+    #[cfg(target_arch = "wasm32")]
+    {
+        wasm_fs::mkdir(path)
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        std::fs::create_dir_all(path).map_err(|e| e.to_string())
+    }
+}
+
+pub(super) fn io_list_dir(path: &str) -> Result<Vec<String>, String> {
+    #[cfg(target_arch = "wasm32")]
+    {
+        wasm_fs::list_dir(path)
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let mut names = Vec::new();
+        let rd = std::fs::read_dir(path).map_err(|e| e.to_string())?;
+        for entry in rd {
+            let entry = entry.map_err(|e| e.to_string())?;
+            names.push(entry.file_name().to_string_lossy().into_owned());
+        }
+        names.sort();
+        Ok(names)
     }
 }
 

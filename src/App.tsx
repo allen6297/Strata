@@ -13,6 +13,7 @@ import {
 import { LogPanel } from '@/components/LogPanel'
 import { ProjectHome } from '@/components/ProjectHome'
 import { ScriptPanel } from '@/components/ScriptPanel'
+import { SettingsDialog, type SettingsKind } from '@/components/SettingsDialog'
 import { StatusBar } from '@/components/StatusBar'
 import { AddNodePicker } from '@/components/AddNodePicker'
 import { Toolbar } from '@/components/Toolbar'
@@ -52,6 +53,11 @@ import {
   parseProjectSettings,
   saveProjectSettingsToStorage,
 } from '@/lib/project-settings'
+import {
+  loadEditorSettings,
+  saveEditorSettings,
+  type EditorSettings,
+} from '@/lib/editor-settings'
 import {
   collectEntityScripts,
   collectAudioClips,
@@ -105,10 +111,7 @@ import {
 } from '@/lib/rosegold-nodes'
 import {
   applyTheme,
-  loadTheme,
-  saveTheme,
   toggleTheme,
-  type ThemeMode,
 } from '@/lib/theme'
 import {
   collectSubtreeIds,
@@ -196,7 +199,9 @@ export default function App() {
   })
   const [tool, setTool] = useState<ToolMode>('select')
   const [playing, setPlaying] = useState(false)
-  const [snap, setSnap] = useState(true)
+  const [editor, setEditor] = useState<EditorSettings>(loadEditorSettings)
+  const { theme, snap, gridSize, scriptFontSize } = editor
+  const [settingsKind, setSettingsKind] = useState<SettingsKind | null>(null)
   const [projectPath, setProjectPath] = useState<string | null>(null)
   const [homeOpen, setHomeOpen] = useState(true)
   const [enteredEditor, setEnteredEditor] = useState(false)
@@ -205,9 +210,7 @@ export default function App() {
   const [scripts, setScripts] = useState<AssetItem[]>(bootScripts)
   const [assetsLoading, setAssetsLoading] = useState(false)
   const [assetsError, setAssetsError] = useState<string | null>(null)
-  const [selectedAssetId, setSelectedAssetId] = useState<string | null>(
-    'scr_player',
-  )
+  const [selectedAssetId, setSelectedAssetId] = useState<string | null>(null)
   const [openScriptIds, setOpenScriptIds] = useState<string[]>(() => {
     const first = bootScripts()[0]?.id
     return first ? [first] : []
@@ -222,6 +225,9 @@ export default function App() {
   const [dirty, setDirty] = useState(false)
   const [status, setStatus] = useState<string | null>(null)
   const [playLog, setPlayLog] = useState('')
+  const [playHud, setPlayHud] = useState<{ x: number; y: number; text: string }[]>(
+    [],
+  )
   const [scriptReveal, setScriptReveal] = useState<ScriptReveal | null>(null)
   const [counters, setCounters] = useState({
     sprite: 1,
@@ -239,7 +245,6 @@ export default function App() {
     zoom: 1,
   })
   const [scenePath, setScenePath] = useState<string | null>(null)
-  const [theme, setTheme] = useState<ThemeMode>(() => loadTheme())
   const [sceneMode, setSceneMode] = useState<SceneMode>(bootMode)
   const [sceneMenu, setSceneMenu] = useState<SceneContextMenuState | null>(null)
   const [addNodePos, setAddNodePos] = useState<{ x: number; y: number } | null>(
@@ -251,6 +256,9 @@ export default function App() {
   const [tileBrush, setTileBrush] = useState(0)
   const [renderLayers, setRenderLayers] = useState(
     () => loadProjectSettingsFromStorage().renderLayers,
+  )
+  const [projectName, setProjectName] = useState(
+    () => loadProjectSettingsFromStorage().name,
   )
   const fileInputRef = useRef<HTMLInputElement>(null)
   const savedContentsRef = useRef(savedContents)
@@ -276,6 +284,8 @@ export default function App() {
       setTool: a.setTool,
       setSnap: a.setSnap,
       handleThemeToggle: a.handleThemeToggle,
+      openProjectSettings: a.openProjectSettings,
+      openEditorSettings: a.openEditorSettings,
       flashStatus: a.flashStatus,
     }
   }, [])
@@ -356,11 +366,13 @@ export default function App() {
   }, [])
 
   const projectLabel = useMemo(() => {
+    const named = projectName.trim()
+    if (named) return named
     if (!projectPath) return null
     if (projectPath.startsWith('browser:')) return projectPath.slice(8)
     const parts = projectPath.split(/[\\/]/)
     return parts[parts.length - 1] || projectPath
-  }, [projectPath])
+  }, [projectName, projectPath])
 
   const primaryId = selectedIds[selectedIds.length - 1] ?? null
   const inspectingPrefab = Boolean(selectedPrefabId)
@@ -384,11 +396,40 @@ export default function App() {
 
   // MARK: - UI helpers
 
+  const persistProjectSettings = useCallback(
+    (name: string, layers: typeof renderLayers) => {
+      saveProjectSettingsToStorage({ name, renderLayers: layers })
+    },
+    [],
+  )
+
+  const patchEditor = useCallback((patch: Partial<EditorSettings>) => {
+    setEditor((prev) => {
+      const next: EditorSettings = { ...prev, ...patch }
+      next.gridSize = Math.min(256, Math.max(1, Math.round(next.gridSize)))
+      next.scriptFontSize = Math.min(
+        24,
+        Math.max(10, Math.round(next.scriptFontSize)),
+      )
+      saveEditorSettings(next)
+      if (patch.theme) applyTheme(next.theme)
+      return next
+    })
+  }, [])
+
+  const setSnap = useCallback((fn: (s: boolean) => boolean) => {
+    setEditor((prev) => {
+      const next = { ...prev, snap: fn(prev.snap) }
+      saveEditorSettings(next)
+      return next
+    })
+  }, [])
+
   const handleThemeToggle = useCallback(() => {
-    setTheme((prev) => {
-      const next = toggleTheme(prev)
-      applyTheme(next)
-      saveTheme(next)
+    setEditor((prev) => {
+      const next = { ...prev, theme: toggleTheme(prev.theme) }
+      saveEditorSettings(next)
+      applyTheme(next.theme)
       return next
     })
   }, [])
@@ -573,6 +614,7 @@ export default function App() {
         setSelectedPrefabId(null)
         return
       }
+      setSelectedAssetId(null)
       setSelectedPrefabId(null)
       setSelectedIds((prev) => {
         if (opts?.range && prev.length) {
@@ -648,10 +690,10 @@ export default function App() {
   const changeRenderLayers = useCallback(
     (layers: typeof renderLayers) => {
       setRenderLayers(layers)
-      saveProjectSettingsToStorage({ renderLayers: layers })
+      persistProjectSettings(projectName, layers)
       markDirty()
     },
-    [markDirty],
+    [markDirty, persistProjectSettings, projectName],
   )
 
   const deleteRenderLayer = useCallback(
@@ -663,7 +705,7 @@ export default function App() {
           .sort((a, b) => a.order - b.order)[0]?.id ?? defaultLayerId(renderLayers)
       const next = renderLayers.filter((l) => l.id !== id)
       setRenderLayers(next)
-      saveProjectSettingsToStorage({ renderLayers: next })
+      persistProjectSettings(projectName, next)
       commit((prev) =>
         prev.map((e) => (e.layerId === id ? { ...e, layerId: fallback } : e)),
       )
@@ -672,7 +714,7 @@ export default function App() {
       )
       markDirty()
     },
-    [commit, markDirty, renderLayers],
+    [commit, markDirty, persistProjectSettings, projectName, renderLayers],
   )
 
   const onMoveEntity = useCallback(
@@ -765,6 +807,7 @@ export default function App() {
       entity = { ...entity, layerId: defaultLayerId(renderLayers) }
       setCounters((c) => ({ ...c, [kind]: nextIndex + 1 }))
       commit((prev) => [...prev, entity])
+      setSelectedAssetId(null)
       setSelectedIds([entity.id])
       setTool('select')
       markDirty()
@@ -869,6 +912,7 @@ export default function App() {
     }
     if (!copies.length) return
     commit((prev) => [...prev, ...copies])
+    setSelectedAssetId(null)
     setSelectedIds(copies.map((c) => c.id))
     markDirty()
   }, [commit, entities, markDirty, selectedIds])
@@ -882,6 +926,7 @@ export default function App() {
       setSceneMode(doc.mode)
       if (doc.scripts?.length) adoptScripts(doc.scripts)
       setPrefabs(doc.prefabs ?? [])
+      setSelectedAssetId(null)
       setSelectedIds(doc.entities[0]?.id ? [doc.entities[0].id] : [])
       setDirty(false)
       setScenePath(path)
@@ -895,7 +940,7 @@ export default function App() {
     const doc = toSceneDocument(sceneName, entities, scripts, sceneMode, prefabs)
     saveSceneToStorage(doc)
     saveScriptsToStorage(scripts)
-    saveProjectSettingsToStorage({ renderLayers })
+    saveProjectSettingsToStorage({ name: projectName, renderLayers })
     try {
       if (projectPath) {
         writingProjectRef.current = true
@@ -922,7 +967,7 @@ export default function App() {
     } catch (err) {
       flashStatus(err instanceof Error ? err.message : 'Failed to save')
     }
-  }, [entities, flashStatus, prefabs, projectPath, renderLayers, sceneMode, sceneName, scenePath, scripts, snapshotSavedScripts])
+  }, [entities, flashStatus, prefabs, projectName, projectPath, renderLayers, sceneMode, sceneName, scenePath, scripts, snapshotSavedScripts])
 
   const saveAsPrefab = useCallback(
     (entity: Entity) => {
@@ -948,6 +993,7 @@ export default function App() {
       }
       commit((prev) => [...prev, ...copies])
       setSelectedPrefabId(null)
+      setSelectedAssetId(null)
       setSelectedIds([copies[0]!.id])
       markDirty()
       flashStatus(`Placed ${copies[0]!.name}`)
@@ -986,6 +1032,7 @@ export default function App() {
 
   const selectPrefab = useCallback((id: string | null) => {
     setSelectedIds([])
+    if (id) setSelectedAssetId(null)
     setSelectedPrefabId(id)
   }, [])
 
@@ -1086,6 +1133,7 @@ export default function App() {
       playReadyRef.current = false
       playUsesEngineRef.current = false
       setPlaying(false)
+      setPlayHud([])
       discardTransient()
       await engineClearPlay()
       flashStatus('Stopped')
@@ -1112,6 +1160,7 @@ export default function App() {
         applyTransient(() =>
           mergeEngineEntities(entities, frame.scene.entities, latestScripts),
         )
+        setPlayHud(frame.hud ?? [])
         runSideEffects(engineSideEffectsToRuntime(frame.sideEffects))
         const hostLabel = isTauri() ? 'Engine host' : 'WASM engine'
         const chunks = [
@@ -1134,6 +1183,7 @@ export default function App() {
         playReadyRef.current = false
         playUsesEngineRef.current = false
         setPlaying(false)
+        setPlayHud([])
         discardTransient()
       }
       return
@@ -1225,6 +1275,7 @@ export default function App() {
                 scriptsRefForPlay.current,
               )
               applyTransient(() => nextEntities)
+              setPlayHud(frame.hud ?? [])
               // Re-bind only when the set of scripted entities changes (e.g. spawn)
               const bindings = collectEntityScripts(
                 nextEntities,
@@ -1362,12 +1413,18 @@ export default function App() {
             joinProjectPath(path, PROJECT_SETTINGS_FILE),
           )
           if (settingsText) {
-            setRenderLayers(parseProjectSettings(JSON.parse(settingsText)).renderLayers)
+            const parsed = parseProjectSettings(JSON.parse(settingsText))
+            setRenderLayers(parsed.renderLayers)
+            setProjectName(parsed.name)
           } else {
-            setRenderLayers(defaultProjectSettings().renderLayers)
+            const fallback = defaultProjectSettings()
+            setRenderLayers(fallback.renderLayers)
+            setProjectName(fallback.name)
           }
         } catch {
-          setRenderLayers(defaultProjectSettings().renderLayers)
+          const fallback = defaultProjectSettings()
+          setRenderLayers(fallback.renderLayers)
+          setProjectName(fallback.name)
         }
         if (mapped.scripts.length) adoptScripts(mapped.scripts)
         else adoptScripts([])
@@ -1406,6 +1463,7 @@ export default function App() {
             replace(nextEntities)
             setSceneName(doc.name)
             setSceneMode(doc.mode)
+            setSelectedAssetId(null)
             setSelectedIds(nextEntities[0]?.id ? [nextEntities[0].id] : [])
           } catch {
             // keep current scene if parse fails
@@ -1434,6 +1492,7 @@ export default function App() {
       playReadyRef.current = false
       playUsesEngineRef.current = false
       setPlaying(false)
+      setPlayHud([])
       discardTransient()
       await engineClearPlay()
     }
@@ -1551,7 +1610,7 @@ export default function App() {
       )
       await writeProjectFile(
         joinProjectPath(projectPath, PROJECT_SETTINGS_FILE),
-        JSON.stringify({ renderLayers }, null, 2),
+        JSON.stringify({ name: projectName, renderLayers }, null, 2),
       )
       await writeProjectScripts(projectPath, scripts)
       saveSceneToStorage(doc)
@@ -1564,7 +1623,7 @@ export default function App() {
     } finally {
       writingProjectRef.current = false
     }
-  }, [entities, flashStatus, prefabs, projectPath, renderLayers, sceneMode, sceneName, scripts, snapshotSavedScripts])
+  }, [entities, flashStatus, prefabs, projectName, projectPath, renderLayers, sceneMode, sceneName, scripts, snapshotSavedScripts])
 
   const createExplorerFolder = useCallback(
     async (relativeDir: string) => {
@@ -1598,15 +1657,42 @@ export default function App() {
     markDirty()
   }, [markDirty, openScript, persistScripts, scripts])
 
-  const handleAssetSelect = useCallback(
-    (id: string) => {
-      setSelectedAssetId(id)
-      const asset = assets.find((a) => a.id === id)
-      if (asset?.type === 'script') {
-        openScript(id)
+  const handleAssetSelect = useCallback((id: string) => {
+    setSelectedIds([])
+    setSelectedPrefabId(null)
+    setSelectedAssetId(id)
+  }, [])
+
+  const activateAsset = useCallback(
+    (asset: AssetItem) => {
+      if (asset.type === 'texture') {
+        if (!primaryId) {
+          flashStatus('Select an entity first')
+          return
+        }
+        updateEntity(primaryId, { textureId: asset.id })
+        flashStatus(`Texture → ${asset.name}`)
+      } else if (asset.type === 'audio') {
+        if (!primaryId) {
+          flashStatus('Select an entity first')
+          return
+        }
+        updateEntity(primaryId, { audioId: asset.id })
+        flashStatus(`Audio → ${asset.name}`)
+      } else if (asset.type === 'script') {
+        openScript(asset.id)
+        flashStatus(`Editing ${asset.name}`)
+      } else if (asset.type === 'scene' && asset.content) {
+        try {
+          const doc = parseSceneDocument(JSON.parse(asset.content))
+          applyOpenedScene(doc, null)
+          flashStatus(`Opened ${asset.name}`)
+        } catch {
+          flashStatus(`Could not open ${asset.name}`)
+        }
       }
     },
-    [assets, openScript],
+    [applyOpenedScene, flashStatus, openScript, primaryId, updateEntity],
   )
 
   const updateScriptContent = useCallback(
@@ -1650,6 +1736,11 @@ export default function App() {
         if (typing) return
         e.preventDefault()
         handleRedo()
+        return
+      }
+      if (mod && e.key === ',') {
+        e.preventDefault()
+        setSettingsKind(e.shiftKey ? 'project' : 'editor')
         return
       }
       if (mod && e.key.toLowerCase() === 'd') {
@@ -1725,6 +1816,8 @@ export default function App() {
     setTool,
     setSnap,
     handleThemeToggle,
+    openProjectSettings: () => setSettingsKind('project'),
+    openEditorSettings: () => setSettingsKind('editor'),
     flashStatus,
     openAddNode,
   })
@@ -1744,6 +1837,8 @@ export default function App() {
     setTool,
     setSnap,
     handleThemeToggle,
+    openProjectSettings: () => setSettingsKind('project'),
+    openEditorSettings: () => setSettingsKind('editor'),
     flashStatus,
     openAddNode,
   }
@@ -1825,6 +1920,7 @@ export default function App() {
                         nonce: Date.now(),
                       })
                     }}
+                    fontSize={scriptFontSize}
                   />
                 ) : (
                   <Viewport
@@ -1833,8 +1929,10 @@ export default function App() {
                     tool={tool}
                     playing={playing}
                     snap={snap}
+                    gridSize={gridSize}
                     textureUrlById={textureUrlById}
                     renderLayers={renderLayers}
+                    hud={playing ? playHud : []}
                     onSelect={selectEntity}
                     onMoveEntity={onMoveEntity}
                     onMoveBegin={beginTransient}
@@ -1888,23 +1986,7 @@ export default function App() {
                   flashStatus(`Script → ${asset.name}`)
                 }
               }}
-              onActivate={(asset) => {
-                if (asset.type === 'texture' && primaryId) {
-                  updateEntity(primaryId, { textureId: asset.id })
-                  flashStatus(`Texture → ${asset.name}`)
-                } else if (asset.type === 'script') {
-                  openScript(asset.id)
-                  flashStatus(`Editing ${asset.name}`)
-                } else if (asset.type === 'scene' && asset.content) {
-                  try {
-                    const doc = parseSceneDocument(JSON.parse(asset.content))
-                    applyOpenedScene(doc, null)
-                    flashStatus(`Opened ${asset.name}`)
-                  } catch {
-                    flashStatus(`Could not open ${asset.name}`)
-                  }
-                }
-              }}
+              onActivate={activateAsset}
             />
           )
         case 'inspector':
@@ -1938,6 +2020,13 @@ export default function App() {
               renderLayers={renderLayers}
               onChangeRenderLayers={changeRenderLayers}
               onDeleteLayer={deleteRenderLayer}
+              previewAsset={
+                selected
+                  ? null
+                  : (assets.find((a) => a.id === selectedAssetId) ?? null)
+              }
+              onPreviewActivate={activateAsset}
+              canAssignPreview={false}
               tileBrush={tileBrush}
               onTileBrushChange={setTileBrush}
               onChange={inspectingPrefab ? updatePrefab : updateEntity}
@@ -1961,6 +2050,7 @@ export default function App() {
     },
     [
       activeScriptId,
+      activateAsset,
       applyOpenedScene,
       assets,
       assetsError,
@@ -1993,6 +2083,7 @@ export default function App() {
       openScriptIds,
       paintTile,
       playLog,
+      playHud,
       playing,
       prefabs,
       placePrefab,
@@ -2016,6 +2107,8 @@ export default function App() {
       selectedIds,
       selectedPrefabId,
       snap,
+      gridSize,
+      scriptFontSize,
       textureUrlById,
       theme,
       tileBrush,
@@ -2070,6 +2163,8 @@ export default function App() {
           onOpenProject={() => void openProject()}
           onSaveProject={() => void saveProject()}
           onThemeToggle={handleThemeToggle}
+          onProjectSettings={() => setSettingsKind('project')}
+          onEditorSettings={() => setSettingsKind('editor')}
           onModeChange={handleModeChange}
         />
 
@@ -2132,6 +2227,31 @@ export default function App() {
                 : undefined)
               setAddNodePos(null)
             }}
+          />
+        )}
+
+        {settingsKind && (
+          <SettingsDialog
+            kind={settingsKind}
+            projectName={projectName}
+            folderLabel={
+              projectPath
+                ? projectPath.startsWith('browser:')
+                  ? projectPath.slice(8)
+                  : projectPath.split(/[\\/]/).pop() ?? projectPath
+                : null
+            }
+            renderLayers={renderLayers}
+            editor={editor}
+            onProjectName={(name) => {
+              setProjectName(name)
+              persistProjectSettings(name, renderLayers)
+              markDirty()
+            }}
+            onChangeLayers={changeRenderLayers}
+            onDeleteLayer={deleteRenderLayer}
+            onEditor={patchEditor}
+            onClose={() => setSettingsKind(null)}
           />
         )}
 

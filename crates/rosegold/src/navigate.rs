@@ -712,7 +712,8 @@ mod tests {
 
     #[test]
     fn def_at_prelude_vec3() {
-        let src = "fn main(): Int {\n    var v = Vec3 { x: 1.0, y: 2.0, z: 3.0 };\n    return 0;\n}\n";
+        let src =
+            "fn main(): Int {\n    var v = Vec3 { x: 1.0, y: 2.0, z: 3.0 };\n    return 0;\n}\n";
         let info = def_at(src, "t.rg", 2, 13, HashMap::new()).expect("Vec3");
         assert_eq!(info.kind, "class");
         assert_eq!(info.name, "Vec3");

@@ -508,7 +508,7 @@
     "label": "io",
     "detail": "stdlib",
     "signature": "import io",
-    "doc": "Read, write, append, and remove text files. Desktop uses the host disk. WASM Play uses an in-memory VFS (not the host disk).",
+    "doc": "Read, write, append, remove text files, and list or create directories. Desktop uses the host disk. WASM Play uses an in-memory VFS (not the host disk).",
     "kind": "module"
   },
   {
@@ -570,6 +570,82 @@
     "kind": "function",
     "template": "remove(${path})",
     "params": ["path"]
+  },
+  {
+    "key": "io.mkdir",
+    "label": "mkdir",
+    "detail": "(path)",
+    "signature": "io.mkdir(path: String): Result",
+    "doc": "Create a directory and any missing parents. Returns Result.Ok if it already exists. On WASM this is the Play-session VFS, not the host disk.",
+    "kind": "function",
+    "template": "mkdir(${path})",
+    "params": ["path"]
+  },
+  {
+    "key": "io.list_dir",
+    "label": "list_dir",
+    "detail": "(path)",
+    "signature": "io.list_dir(path: String): Result",
+    "doc": "List a directory as Result.Ok(Array) of names (not full paths). Missing or non-directory paths return Result.Err.",
+    "kind": "function",
+    "template": "list_dir(${path})",
+    "params": ["path"]
+  },
+  {
+    "key": "io.is_dir",
+    "label": "is_dir",
+    "detail": "(path)",
+    "signature": "io.is_dir(path: String): Bool",
+    "doc": "True if that path is a directory (host disk on desktop; in-memory VFS on WASM).",
+    "kind": "function",
+    "template": "is_dir(${path})",
+    "params": ["path"]
+  },
+  {
+    "key": "time",
+    "label": "time",
+    "detail": "host",
+    "signature": "import time",
+    "doc": "Wall-clock and VM elapsed time. Requires `import time;`. This is not frame `dt` from `on_update`.",
+    "kind": "module"
+  },
+  {
+    "key": "time.now",
+    "label": "now",
+    "detail": "()",
+    "signature": "time.now(): Float",
+    "doc": "Unix time in seconds (fractional). Wall clock, not frame delta.",
+    "kind": "function",
+    "template": "now()",
+    "params": []
+  },
+  {
+    "key": "time.elapsed",
+    "label": "elapsed",
+    "detail": "()",
+    "signature": "time.elapsed(): Float",
+    "doc": "Seconds since this script VM started. Use instead of accumulating `dt`. Not wall-clock; see `time.now`.",
+    "kind": "function",
+    "template": "elapsed()",
+    "params": []
+  },
+  {
+    "key": "ui",
+    "label": "ui",
+    "detail": "host",
+    "signature": "import ui",
+    "doc": "Screen-space play HUD. Call every on_update; the list is rebuilt each frame. Requires `import ui;`.",
+    "kind": "module"
+  },
+  {
+    "key": "ui.text",
+    "label": "text",
+    "detail": "(x, y, text)",
+    "signature": "ui.text(x: Float, y: Float, text: Str)",
+    "doc": "Draw text this frame in viewport pixels. Origin is the top-left of the play view, not world space.",
+    "kind": "function",
+    "template": "text(${x}, ${y}, ${text})",
+    "params": ["x", "y", "text"]
   },
   {
     "key": "checks",

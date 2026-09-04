@@ -40,7 +40,7 @@ The language is already past “hello world.” Core syntax, stdlib, modules, a 
 | Collections      | Arrays and maps, shared mutability, index assign                                                                                                                                                                                                                |
 | Types            | User `struct` / `class` / `enum` / `impl` / `trait` + `impl Trait for Type` or nested `impl Trait` in a class, `@node class Foo extends Sprite`, `match`, crate `Option` / `Result` / `Vec2` / `Vec3` / node types (`.rg`); `Str` aliases `String` |
 | Modules          | `mod name { … }` is the namespace; same name **merges across files**. `import x;` / `from x import y;` (filename modules still work). Play host uses the script library                                                                                         |
-| Stdlib           | Public `math` / `str` / `option` / `result` / `checks` / `vec` (`Vec2`, `Vec3`) / `node` (`Sprite`, …) are crate `stdlib/*.rg`. Trig and string search stay `__math` / `__str`. Host forever: `io`, `strata` (`move`/`rot`/`set`/`spawn`/`destroy`/`play_sound`/`after`/`find`), `input` (`pressed`/`held`) |
+| Stdlib           | Public `math` / `str` / `option` / `result` / `checks` / `vec` (`Vec2`, `Vec3`) / `node` (`Sprite`, …) are crate `stdlib/*.rg`. Trig and string search stay `__math` / `__str`. Host forever: `io`, `time` (`now`/`elapsed`), `strata` (`move`/`rot`/`set`/`spawn`/`destroy`/`play_sound`/`after`/`find`), `input` (`pressed`/`held`) |
 | Builtins         | `print`, `len`, `assert`, `Array(...)`, `Map(...)`                                                                                                                                                                                                              |
 | Operators        | Arithmetic, `//` integer division, `&&` / `\|\|`, bitwise `&` `\|` `^` `<<` `>>` `~` and `&=` `\|=` `^=` on `Int`                                                                                                                                              |
 | UFCS             | `@ufcs` on a free `fn`; `x.foo(y)` → `foo(x, y)` when no inherent method `foo` exists                                                                                                                                                                           |
@@ -53,7 +53,7 @@ The language is already past “hello world.” Core syntax, stdlib, modules, a 
 
 1. **VS Code uses the Rust CLI plus `catalog.json`.** The extension calls `rosegold check` / `hover` / `def` / `fmt`. Point `rosegold.cliPath` at the binary if it is not under `target/`.
 2. **`fmt` keeps `#` comments and `##` docs.** `->` is accepted as a return-type alias for `:`.
-3. **WASM `io` is an in-memory VFS** — `read_text` / `read_lines` / `write_text` / `append_text` / `remove` / `exists` round-trip paths in the Play session; they are not the host disk.
+3. **WASM `io` is an in-memory VFS** — `read_text` / `read_lines` / `write_text` / `append_text` / `remove` / `exists` / `mkdir` / `list_dir` / `is_dir` round-trip paths in the Play session; they are not the host disk.
 4. **RG10 is done** (`class` / `trait` / `@ufcs` / bitwise / `##` / `extends` / `super`). Multiple inheritance / instance `private` stay out. Module `pub` is required inside `mod { }`.
 
 ### Crate map
@@ -145,7 +145,7 @@ In-app hover/docs: **SE6** is the static catalog; **SE7** adds `hover_at` / `def
 | Work item                | Notes                                                                                                      |
 | ------------------------ | ---------------------------------------------------------------------------------------------------------- |
 | File imports in the demo | Hero `import utils;` binds `mod utils` (demo file `utils.rg`)                                              |
-| Typecheck stdlib arity   | Host `io` / `strata` / `input` from a small table; public `math.*` / `str.*` / `checks.*` from crate `.rg` |
+| Typecheck stdlib arity   | Host `io` / `time` / `strata` / `input` from a small table; public `math.*` / `str.*` / `checks.*` from crate `.rg` |
 | Import graph             | `import m` registers `m.fn`; `from m import foo` binds arity when the module resolves                      |
 | Match / enums            | `Rect(w, h)` unpacks; `Rect(dims)` is still the whole payload; named binds when the enum names fields |
 | Game math                | `math.sqrt`, `sin`, `cos`, `atan2`                                                                         |
@@ -187,7 +187,7 @@ Do not invent a large entity query language here. If you need collisions, that i
 | Work item                 | Notes                                                                                            |
 | ------------------------- | ------------------------------------------------------------------------------------------------ |
 | In-memory project modules | `PlaySession` / `CombinedResolver` supplies `{ "utils.rg": "…" }` from the script library        |
-| Sandbox `io`              | wasm32 uses an in-memory VFS (`read_text` / `read_lines` / `write_text` / `append_text` / `remove` / `exists`); not the host disk                  |
+| Sandbox `io`              | wasm32 uses an in-memory VFS (`read_text` / `read_lines` / `write_text` / `append_text` / `remove` / `exists` / `mkdir` / `list_dir` / `is_dir`); not the host disk                  |
 | Same hook API             | WASM `engine_load_scene` / `engine_tick` call `load_program` / `call`, not `run_source` per tick |
 | **Acceptance**            | Same Hero/Coin sources play in `npm run dev` (after `npm run build:wasm`) — no second dialect    |
 
@@ -293,12 +293,12 @@ fn on_enter(other: Str, x: Float, y: Float): Int {
 
 Scripts still cannot implement IEEE `sin` or Unicode `upper` in a tree-walker. Those stay a **thin native primitive table**. `math.rg` / `str.rg` are the public API: they re-export primitives and implement the rest in RoseGold (`clamp`, `lerp`, `gcd`, `repeat`, …).
 
-Do **not** Taylor-series `sin` in `.rg`. Do **not** rewrite `strata` / `io` / `input` as RoseGold.
+Do **not** Taylor-series `sin` in `.rg`. Do **not** rewrite `strata` / `io` / `input` / `time` as RoseGold.
 
 
 | Work item                 | Notes                                                                                                                                                                                                                         |
 | ------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Two layers                | `**.rg` (public):** `option`, `result`, `math`, `str`, then `checks` if pure. **Rust primitives:** `sin`/`cos`/`atan2`/`sqrt`/`pow`, string `contains`/`upper`/`lower`/`trim`. **Rust host forever:** `io`, `strata`, `input` |
+| Two layers                | `**.rg` (public):** `option`, `result`, `math`, `str`, then `checks` if pure. **Rust primitives:** `sin`/`cos`/`atan2`/`sqrt`/`pow`, string `contains`/`upper`/`lower`/`trim`. **Rust host forever:** `io`, `time`, `strata`, `input` |
 | Embed in the crate        | Resolver always sees `stdlib/*.rg` before user modules. Users never vendor copies                                                                                                                                             |
 | WASM                      | In-memory map includes embedded stdlib automatically. Do not wait for the script library / Files panel                                                                                                                        |
 | Drop interpreter specials | Once `.rg` covers `Option`/`Result` and math/str wrappers, remove hardwired *modules*. Keep the primitive builtins they call                                                                                                  |
@@ -524,7 +524,8 @@ Keep the public stdlib **small and total**. Prefer a new `math.sin` over a new l
 | `str`               | crate `str.rg` wrapping `__str.contains`/`upper`/`lower`/`trim`/`split`/`slice`              | —                                | regex; `contains` as a char loop  |
 | `vec`               | crate `vec.rg`: `class Vec2` / `class Vec3 extends Vec2` with `length` / `add`                | more vector ops if a demo needs  | a language-level vector type      |
 | `node`              | crate `node.rg`: `Node` / `Empty` / `Sprite` / … for `@node class`                            | more node fields if a demo needs | replacing Entity.kind with the class name |
-| `io`                | `read_text` / `read_lines` / `write_text` / `append_text` / `remove` / `exists` (native); WASM is in-memory VFS | —                                | network, directories              |
+| `io`                | `read_text` / `read_lines` / `write_text` / `append_text` / `remove` / `exists` / `mkdir` / `list_dir` / `is_dir` (native); WASM is in-memory VFS | —                                | network                           |
+| `time`              | `now()` Unix seconds; `elapsed()` since this VM — not frame `dt`                             | —                                | date formatting, timezones        |
 | `checks`            | crate `checks.rg` on `assert`                                                                | keep for `@test`                 | a second test framework           |
 | `strata`            | `move`, `rot`, `set`, `spawn` (inline or prefab), `destroy`, `play_sound`, `after`, `find`  | —                                | entity lists, query language      |
 | `input`             | `pressed` / `held` (KeyboardEvent codes)                                                     | remapping UI in the language     | action maps as a language feature |
@@ -532,7 +533,7 @@ Keep the public stdlib **small and total**. Prefer a new `math.sin` over a new l
 | `option` / `result` | crate `option.rg` / `result.rg`                                                              | —                                | user-vendored copies              |
 
 
-**Host** (`io`, `strata`, `input`) stays Rust. **Public** `math` / `str` / `option` / `result` / `checks` are crate `.rg` that wrap a small primitive table. Injected by every resolver so WASM does not need project files.
+**Host** (`io`, `time`, `strata`, `input`) stays Rust. **Public** `math` / `str` / `option` / `result` / `checks` are crate `.rg` that wrap a small primitive table. Injected by every resolver so WASM does not need project files.
 
 ---
 
@@ -550,7 +551,7 @@ Keep the public stdlib **small and total**. Prefer a new `math.sin` over a new l
 - `export` / `exportgroup` **keywords** — use `@export` / `@export_group` (RG6)
 - Entity query language / `find` as a mini-SQL — nearest/by-name only if a demo is stuck
 - Implementing `sin` / Unicode casefold in `.rg` — `math.rg` / `str.rg` wrap primitives; they do not replace them
-- Rewriting `io` / `strata` / `input` as `.rg` — those are host
+- Rewriting `io` / `time` / `strata` / `input` as `.rg` — those are host
 
 ---
 
@@ -615,7 +616,7 @@ Keep the public stdlib **small and total**. Prefer a new `math.sin` over a new l
 
 | #   | Question            | Choice                                                                                                       |
 | --- | ------------------- | ------------------------------------------------------------------------------------------------------------ |
-| 1   | **Public modules**  | `option` / `result` / `math` / `str` (then `checks`) as crate `.rg`. `io` / `strata` / `input` stay host     |
+| 1   | **Public modules**  | `option` / `result` / `math` / `str` (then `checks`) as crate `.rg`. `io` / `time` / `strata` / `input` stay host     |
 | 2   | **Primitives**      | Trig, `pow`/`sqrt`, string search/case/trim stay Rust. `.rg` re-exports them and implements `clamp`/`lerp`/… |
 | 3   | **Where they live** | Embedded in the crate; every resolver injects them. Not sibling files in the user’s project                  |
 | 4   | **When**            | After RG8. WASM import already works; this is so you can read/edit stdlib as RoseGold                        |

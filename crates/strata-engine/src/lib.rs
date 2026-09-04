@@ -19,7 +19,7 @@ pub use scene::{
   COLLISION_BIT_COUNT, DEFAULT_LAYER_ID, ENGINE_VERSION,
 };
 pub use script::{
-  NullScriptHost, PlayFrame, PlaySession, PlaySideEffect, RoseGoldScriptHost, ScriptHost,
+  HudText, NullScriptHost, PlayFrame, PlaySession, PlaySideEffect, RoseGoldScriptHost, ScriptHost,
   StrataDirective, parse_strata_directives,
 };
 pub use world::World;

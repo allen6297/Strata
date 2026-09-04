@@ -54,6 +54,12 @@ pub enum HostEffect {
         delay: f64,
         method: String,
     },
+    /// Screen-space play HUD. Immediate-mode: call every `on_update`.
+    UiText {
+        x: f64,
+        y: f64,
+        text: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

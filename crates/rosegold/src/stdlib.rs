@@ -1,4 +1,4 @@
-//! Crate-embedded public stdlib (`.rg`). Host APIs (`io`, `strata`, `input`)
+//! Crate-embedded public stdlib (`.rg`). Host APIs (`io`, `strata`, `input`, `time`, `ui`)
 //! stay native. Trig / string search stay a thin primitive table (`__math`, `__str`).
 
 use std::collections::HashMap;
@@ -25,7 +25,10 @@ pub fn sources_map() -> HashMap<String, String> {
 
 /// Host-only modules. Never loaded from `.rg`.
 pub fn is_host_module(name: &str) -> bool {
-    matches!(name, "io" | "strata" | "input" | "__math" | "__str")
+    matches!(
+        name,
+        "io" | "strata" | "input" | "time" | "ui" | "__math" | "__str"
+    )
 }
 
 /// Public stdlib that lives in `stdlib/*.rg`.

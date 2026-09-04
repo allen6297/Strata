@@ -168,6 +168,48 @@ fn main(): Int {
 }
 
 #[test]
+fn ui_text_records_effect() {
+    let result = run_source(
+        r#"
+import ui;
+fn main(): Int {
+    ui.text(16.0, 24.0, "coins 3");
+    return 0;
+}
+"#,
+    );
+    assert!(result.ok, "{}\nstderr: {}", result.message, result.stderr);
+    assert_eq!(
+        result.effects,
+        vec![HostEffect::UiText {
+            x: 16.0,
+            y: 24.0,
+            text: "coins 3".into(),
+        }]
+    );
+}
+
+#[test]
+fn typecheck_ui_text_arity() {
+    let diags = check_source(
+        r#"
+import ui;
+fn main(): Int {
+    ui.text(1.0);
+    return 0;
+}
+"#,
+        "t.rg",
+    );
+    assert!(
+        diags
+            .iter()
+            .any(|d| d.message.contains("ui.text") && d.message.contains("expected 3 args")),
+        "{diags:?}"
+    );
+}
+
+#[test]
 fn strata_spawn_from_map() {
     let result = run_source(
         r##"
@@ -3074,7 +3116,8 @@ fn typecheck_io_arity_and_unknown() {
 import io;
 fn main(): Int {
     io.append_text("a.txt");
-    io.list_dir("a.txt");
+    io.list_dir();
+    io.chmod("a.txt");
     return 0;
 }
 "#,
@@ -3089,7 +3132,33 @@ fn main(): Int {
     assert!(
         diags
             .iter()
-            .any(|d| d.message.contains("unknown function") && d.message.contains("io.list_dir")),
+            .any(|d| d.message.contains("list_dir") && d.message.contains("expected 1 args")),
+        "{diags:?}"
+    );
+    assert!(
+        diags
+            .iter()
+            .any(|d| d.message.contains("unknown function") && d.message.contains("io.chmod")),
+        "{diags:?}"
+    );
+}
+
+#[test]
+fn typecheck_time_arity() {
+    let diags = check_source(
+        r#"
+import time;
+fn main(): Int {
+    time.now(1);
+    return 0;
+}
+"#,
+        "t.rg",
+    );
+    assert!(
+        diags
+            .iter()
+            .any(|d| d.message.contains("time.now") && d.message.contains("expected 0 args")),
         "{diags:?}"
     );
 }
@@ -3156,6 +3225,72 @@ fn main(): Int {{
     assert!(out.contains("true"));
     assert!(out.contains("hello rosegold"));
     assert!(!path.exists(), "io.remove should delete the file");
+}
+
+#[test]
+fn io_dirs_roundtrip() {
+    use std::fs;
+    let dir = std::env::temp_dir().join("rosegold_io_dir_test");
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).unwrap();
+    let nested = dir.join("saves");
+    let nested_str = nested.to_string_lossy().replace('\\', "\\\\");
+    let missing = dir.join("nope");
+    let missing_str = missing.to_string_lossy().replace('\\', "\\\\");
+    let file_str = nested
+        .join("slot.txt")
+        .to_string_lossy()
+        .replace('\\', "\\\\");
+    let source = format!(
+        r#"
+import io;
+
+fn main(): Int {{
+    print(io.mkdir("{nested}").is_ok());
+    print(io.is_dir("{nested}"));
+    print(io.exists("{nested}"));
+    print(io.write_text("{file}", "ok").is_ok());
+    var names: Array = io.list_dir("{nested}").unwrap();
+    print(names.len());
+    print(names[0]);
+    print(io.is_dir("{file}"));
+    print(io.list_dir("{missing}").is_err());
+    return 0;
+}}
+"#,
+        nested = nested_str,
+        file = file_str,
+        missing = missing_str
+    );
+    let out = assert_ok(&source);
+    let lines: Vec<&str> = out.lines().collect();
+    assert_eq!(
+        lines,
+        [
+            "true", "true", "true", "true", "1", "slot.txt", "false", "true"
+        ],
+        "{out}"
+    );
+}
+
+#[test]
+fn time_now_is_unix_not_delta() {
+    let out = assert_ok(
+        r#"
+import time;
+
+fn main(): Int {
+    var n = time.now();
+    print(n > 1000000000.0);
+    var e = time.elapsed();
+    print(e >= 0.0);
+    print(e < 60.0);
+    return 0;
+}
+"#,
+    );
+    let lines: Vec<&str> = out.lines().collect();
+    assert_eq!(lines, ["true", "true", "true"], "{out}");
 }
 
 #[test]

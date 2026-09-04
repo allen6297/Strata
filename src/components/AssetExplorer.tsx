@@ -163,11 +163,6 @@ export function AssetExplorer({
     return c
   }, [assets])
 
-  const selectedAsset = useMemo(
-    () => assets.find((a) => a.id === selectedId) ?? null,
-    [assets, selectedId],
-  )
-
   const activateIndex = (index: number) => {
     const entry = entries[index]
     if (!entry) return
@@ -479,7 +474,6 @@ export function AssetExplorer({
                     e.preventDefault()
                     e.stopPropagation()
                     setFocusIndex(index)
-                    onSelect(entry.asset.id)
                     setExplorerMenu({
                       kind: 'file',
                       x: e.clientX,
@@ -557,7 +551,6 @@ export function AssetExplorer({
                     e.preventDefault()
                     e.stopPropagation()
                     setFocusIndex(index)
-                    onSelect(entry.asset.id)
                     setExplorerMenu({
                       kind: 'file',
                       x: e.clientX,
@@ -571,9 +564,6 @@ export function AssetExplorer({
           </div>
         )}
       </div>
-      {selectedAsset && (
-        <AssetDetailPanel asset={selectedAsset} onActivate={onActivate} />
-      )}
       </div>
       {explorerMenu && (
         <ContextMenu
@@ -874,88 +864,6 @@ function AssetRow({
       </span>
       <span className="font-mono text-[10px] opacity-70">{asset.size}</span>
     </button>
-  )
-}
-
-function AssetDetailPanel({
-  asset,
-  onActivate,
-}: {
-  asset: AssetItem
-  onActivate?: (asset: AssetItem) => void
-}) {
-  const Icon = icons[asset.type]
-  const [imgError, setImgError] = useState(false)
-
-  return (
-    <div className="shrink-0 border-t border-[var(--border)] bg-[var(--bg-panel)]">
-      <div className="flex h-7 items-center gap-2 border-b border-[var(--border)] px-2">
-        <Icon className="h-3.5 w-3.5 text-[var(--accent)]" />
-        <span className="min-w-0 flex-1 truncate text-[11px] font-medium text-[var(--text)]">
-          {asset.name}
-        </span>
-        <span className="rounded bg-[var(--bg-panel-raised)] px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-wide text-[var(--text-muted)]">
-          {asset.type}
-        </span>
-        <span className="font-mono text-[10px] text-[var(--text-muted)]">
-          {asset.size}
-        </span>
-      </div>
-      <div className="max-h-28 overflow-auto p-2">
-        {asset.type === 'texture' && asset.url && !imgError ? (
-          <div className="flex items-center gap-3">
-            <img
-              src={asset.url}
-              alt=""
-              className="h-20 w-20 rounded border border-[var(--border)] object-contain bg-[var(--bg-input)]"
-              onError={() => setImgError(true)}
-            />
-            <div className="flex flex-col gap-0.5 text-[10px] text-[var(--text-muted)]">
-              <span>{asset.relativePath ?? asset.name}</span>
-              {onActivate && (
-                <button
-                  type="button"
-                  onClick={() => onActivate(asset)}
-                  className="text-left text-[var(--accent)] hover:underline"
-                >
-                  Double-click or click here to assign
-                </button>
-              )}
-            </div>
-          </div>
-        ) : asset.type === 'script' ? (
-          <div className="text-[10px] text-[var(--text-muted)]">
-            <span className="font-mono">{asset.relativePath ?? asset.name}</span>
-            {onActivate && (
-              <button
-                type="button"
-                onClick={() => onActivate(asset)}
-                className="mt-1 block text-left text-[var(--accent)] hover:underline"
-              >
-                Open in script editor
-              </button>
-            )}
-            <p className="mt-1 opacity-60">
-              Click opens the tab. Attach via Inspector, drag, or right-click.
-            </p>
-          </div>
-        ) : asset.type === 'audio' ? (
-          <div className="text-[10px] text-[var(--text-muted)]">
-            <span className="font-mono">{asset.relativePath ?? asset.name}</span>
-            <p className="mt-1 opacity-60">Audio preview is not yet available.</p>
-          </div>
-        ) : asset.type === 'scene' ? (
-          <div className="text-[10px] text-[var(--text-muted)]">
-            <span className="font-mono">{asset.relativePath ?? asset.name}</span>
-            <p className="mt-1 opacity-60">Double-click to load this scene.</p>
-          </div>
-        ) : (
-          <div className="text-[10px] text-[var(--text-muted)]">
-            {asset.relativePath ?? asset.name}
-          </div>
-        )}
-      </div>
-    </div>
   )
 }
 

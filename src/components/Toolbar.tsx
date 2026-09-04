@@ -19,6 +19,8 @@ import {
   Plus,
   Redo2,
   Save,
+  Settings,
+  SlidersHorizontal,
   Sun,
   Trash2,
   Undo2,
@@ -53,6 +55,8 @@ interface ToolbarProps {
   onOpenProject: () => void
   onSaveProject: () => void
   onThemeToggle: () => void
+  onProjectSettings: () => void
+  onEditorSettings: () => void
   onModeChange: (mode: SceneMode) => void
 }
 
@@ -97,6 +101,8 @@ export function Toolbar({
   onOpenProject,
   onSaveProject,
   onThemeToggle,
+  onProjectSettings,
+  onEditorSettings,
   onModeChange,
 }: ToolbarProps) {
   const editingScript = mode === 'script'
@@ -250,6 +256,24 @@ export function Toolbar({
             </span>
           )}
         </div>
+        <Button
+          variant="toolbar"
+          size="icon"
+          onClick={onProjectSettings}
+          title="Project Settings"
+          data-testid="project-settings-open"
+        >
+          <SlidersHorizontal className="h-3.5 w-3.5" />
+        </Button>
+        <Button
+          variant="toolbar"
+          size="icon"
+          onClick={onEditorSettings}
+          title="Editor Settings"
+          data-testid="editor-settings-open"
+        >
+          <Settings className="h-3.5 w-3.5" />
+        </Button>
         <Button
           variant="toolbar"
           size="icon"

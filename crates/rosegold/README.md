@@ -375,7 +375,7 @@ The `pub` keyword is required to export an item from a `mod { }` block. Filename
 Before evaluation, `run_source` / `run_file` run a lenient static pass (`typecheck`):
 
 - Unknown function names and undefined identifiers
-- Wrong call arity for free functions, crate `.rg` stdlib (`math.clamp`, …), host `io.*` / `strata.*` / `input.*`, and instance/`impl` methods (`v.length(1)`, `Array.push()`, crate `Vec2`)
+- Wrong call arity for free functions, crate `.rg` stdlib (`math.clamp`, …), host `io.*` / `time.*` / `ui.*` / `strata.*` / `input.*`, and instance/`impl` methods (`v.length(1)`, `Array.push()`, crate `Vec2`)
 - Unknown methods on known types (`Point` / `Vec2` / `Array` / `Int`, …), and method calls on values with no inferred type (`foo.bar()`)
 - `impl Trait for Type` missing methods, and arity / return mismatches vs the trait
 - `import m` / `from m import foo` so `m.fn` and imported names get arity when the module is resolvable
@@ -413,14 +413,15 @@ runtime error at 3:12: division by zero
 | `result` / `Result` | `Ok`, `Err`; methods `is_ok`, `is_err`, `unwrap`, `unwrap_or`. `Err` is falsy in `if`; unit enums like `Color.Red` are truthy |
 | `vec` / `Vec2` / `Vec3` | `class Vec2` / `class Vec3 extends Vec2` with `length` / `add` (always in scope, like `Option`) |
 | `node` | `Node` / `Empty` / `Sprite` / … — `import strata.Sprite;` then `@node class Foo extends Sprite` |
-| `io` | `read_text(path)`, `read_lines(path)`, `write_text(path, content)`, `append_text(path, content)`, `remove(path)`, `exists(path)` — all file ops except `exists` return `Result` |
+| `io` | `read_text(path)`, `read_lines(path)`, `write_text(path, content)`, `append_text(path, content)`, `remove(path)`, `exists(path)`, `mkdir(path)`, `list_dir(path)`, `is_dir(path)` — file/dir ops except `exists` / `is_dir` return `Result` |
+| `time` | `now()` Unix seconds as `Float`; `elapsed()` seconds since this VM started. Not frame `dt` |
 | `input` | `pressed(code)`, `held(code)` — KeyboardEvent codes (`"Space"`, `"KeyQ"`, `"ArrowRight"`, …) |
 | `strata` | `move(dx, dy)`, `rot(deg)`, `set(x, y)`, `spawn(name | {…})`, `destroy(name)`, `play_sound(name)`, `after(delay, method)`, `find(name?)` |
 
 Builtins (no import): `print`, `len`, `assert`, `Array(...)`, `Map(...)`.
 Prelude types (no import): `Option`, `Result`, `Vec2`, `Vec3`.
 
-Host and crate modules **must be imported** (`import math;`, `import strata;`, `import input;`, `import str;`). Node bases: `import strata.Sprite;` (or `Node`, `Empty`, …).
+Host and crate modules **must be imported** (`import math;`, `import strata;`, `import input;`, `import time;`, `import str;`). Node bases: `import strata.Sprite;` (or `Node`, `Empty`, …).
 
 Array methods: `len`, `push`, `pop`, `first`, `last`, `contains`.  
 Map methods: `len`, `has`, `keys`, `remove`, `insert`.
@@ -465,6 +466,21 @@ fn on_update(name: String, x: Float, y: Float, dt: Float): Int {
 | `strata.find(name)` | Return that scene name if an entity exists, else `none` |
 | `strata.find()` | Name of the nearest other entity, or `none` |
 
+Call `ui.text` every `on_update` — the HUD is rebuilt each frame (not world space):
+
+```rg
+import ui;
+
+fn on_update(name: String, x: Float, y: Float, dt: Float): Int {
+    ui.text(16.0, 16.0, "coins 0");
+    return 0;
+}
+```
+
+| Call | Effect |
+| ---- | ------ |
+| `ui.text(x, y, text)` | Draw `text` this frame at viewport pixels (top-left origin) |
+
 `print("strata:move dx=…")` still works for older scripts. The desktop host and browser WASM play session both run the native interpreter. The engine applies `HostEffect`s (and leftover stdout directives) during play. `on_destroy` runs once when the entity is removed. `input.pressed` / `input.held` read this tick’s keyboard (CSV `keys` / `pressed` hook args still work).
 
 ## Public API
@@ -493,7 +509,7 @@ fn on_update(name: String, x: Float, y: Float, dt: Float): Int {
 - `src/typecheck.rs` — lenient static checks (host arity, `.rg` stdlib, instance methods)
 - `src/stdlib.rs` — crate-embedded `stdlib/*.rg` injection
 - `stdlib/` — public `math` / `str` / `option` / `result` / `checks` / `vec` / `node` as RoseGold
-- `src/interpreter.rs` — `EvalContext`, `Value`, modules, host primitives (`__math` / `__str` / `io` / `strata` / `input`), hooks (`load_program` / `call`)
+- `src/interpreter.rs` — `EvalContext`, `Value`, modules, host primitives (`__math` / `__str` / `io` / `time` / `strata` / `input`), hooks (`load_program` / `call`)
 - `src/host.rs` — `HostEffect` (structured engine requests)
 - `src/navigate.rs` — `def_at` / `hover_at` (in-app jump/hover)
 - `src/export.rs` — `list_exports` / `list_nodes` metadata for the Inspector and Add Node

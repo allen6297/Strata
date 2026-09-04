@@ -25,6 +25,8 @@ export interface AppMenuActions {
   setTool: (tool: ToolMode) => void
   setSnap: (fn: (s: boolean) => boolean) => void
   handleThemeToggle: () => void
+  openProjectSettings: () => void
+  openEditorSettings: () => void
   flashStatus: (message: string) => void
 }
 
@@ -145,6 +147,12 @@ export function NativeMenuBridge({
           break
         case 'toggle_theme':
           a.handleThemeToggle()
+          break
+        case 'project_settings':
+          a.openProjectSettings()
+          break
+        case 'editor_settings':
+          a.openEditorSettings()
           break
         case 'toggle_hierarchy':
           togglePanelRef.current('hierarchy')
